@@ -96,6 +96,16 @@ export function initDatabase(dataDir: string): DbContext {
       default_best_before_days_after_open INTEGER NOT NULL DEFAULT 0,
       picture_file_name TEXT DEFAULT NULL,
       storage_photo_file_name TEXT DEFAULT NULL,
+      off_barcode TEXT DEFAULT NULL,
+      calories_kcal REAL DEFAULT NULL,
+      calories_basis TEXT DEFAULT '',
+      protein_g REAL DEFAULT NULL,
+      carbs_g REAL DEFAULT NULL,
+      fat_g REAL DEFAULT NULL,
+      sugar_g REAL DEFAULT NULL,
+      sodium_mg REAL DEFAULT NULL,
+      serving_size TEXT DEFAULT '',
+      nutriscore_grade TEXT DEFAULT '',
       due_type INTEGER NOT NULL DEFAULT 1,
       row_created_timestamp TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -191,6 +201,23 @@ export function initDatabase(dataDir: string): DbContext {
   // Safe migrations for existing databases
   if (!hasColumn(db, 'products', 'storage_photo_file_name')) {
     db.exec('ALTER TABLE products ADD COLUMN storage_photo_file_name TEXT DEFAULT NULL;');
+  }
+  const nutritionCols: Array<[string, string]> = [
+    ['off_barcode', 'TEXT DEFAULT NULL'],
+    ['calories_kcal', 'REAL DEFAULT NULL'],
+    ['calories_basis', "TEXT DEFAULT ''"],
+    ['protein_g', 'REAL DEFAULT NULL'],
+    ['carbs_g', 'REAL DEFAULT NULL'],
+    ['fat_g', 'REAL DEFAULT NULL'],
+    ['sugar_g', 'REAL DEFAULT NULL'],
+    ['sodium_mg', 'REAL DEFAULT NULL'],
+    ['serving_size', "TEXT DEFAULT ''"],
+    ['nutriscore_grade', "TEXT DEFAULT ''"],
+  ];
+  for (const [col, def] of nutritionCols) {
+    if (!hasColumn(db, 'products', col)) {
+      db.exec(`ALTER TABLE products ADD COLUMN ${col} ${def};`);
+    }
   }
   if (!hasColumn(db, 'api_keys', 'user_id')) {
     db.exec('ALTER TABLE api_keys ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE CASCADE;');

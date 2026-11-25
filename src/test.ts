@@ -747,7 +747,68 @@ async function runTests() {
     );
     assert.ok(shopNoneDone.every((i: any) => Number(i.done) === 0));
 
-    console.log('ALL SERVER v1.8.0 TESTS PASSED!');
+    // 20. Transfer specific stock batch by stock_entry_id (preserves exact expiry date)
+    const batchA = await fetch(`${base}/api/stock/products/${prodId}/add`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ amount: 2, location_id: 1, best_before_date: '2026-10-10' }),
+    }).then((r) => r.json());
+    const batchB = await fetch(`${base}/api/stock/products/${prodId}/add`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ amount: 3, location_id: 1, best_before_date: '2027-03-15' }),
+    }).then((r) => r.json());
+    assert.ok(batchA.id && batchB.id);
+
+    const movedBatchB = await fetch(`${base}/api/stock/products/${prodId}/transfer`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        amount: 2,
+        location_id_from: 1,
+        location_id_to: 2,
+        stock_entry_id: batchB.id,
+      }),
+    }).then((r) => r.json());
+    assert.equal(movedBatchB.transferred, 2);
+
+    const prodEntriesAfterMove = await fetch(`${base}/api/stock/products/${prodId}/entries`, {
+      headers,
+    }).then((r) => r.json());
+    const movedEntry = prodEntriesAfterMove.find(
+      (e: any) => Number(e.location_id) === 2 && e.best_before_date === '2027-03-15'
+    );
+    const remainingBatchB = prodEntriesAfterMove.find((e: any) => Number(e.id) === batchB.id);
+    const untouchedBatchA = prodEntriesAfterMove.find((e: any) => Number(e.id) === batchA.id);
+    assert.ok(movedEntry && Number(movedEntry.amount) === 2, 'Expected 2 of batchB moved to loc 2');
+    assert.ok(remainingBatchB && Number(remainingBatchB.amount) === 1, 'Expected 1 of batchB remaining in loc 1');
+    assert.ok(untouchedBatchA && Number(untouchedBatchA.amount) === 2, 'Expected batchA untouched in loc 1');
+
+    // 21. Open Food Facts nutrition persistence on products
+    await fetch(`${base}/api/objects/products/${prodId}`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({
+        off_barcode: '0049000042566',
+        calories_kcal: 150,
+        calories_basis: 'serving',
+        protein_g: 8,
+        carbs_g: 12,
+        fat_g: 8,
+        sugar_g: 11,
+        sodium_mg: 120,
+        serving_size: '1 cup (240ml)',
+        nutriscore_grade: 'b',
+      }),
+    });
+    const prodWithNutrition = await fetch(`${base}/api/objects/products/${prodId}`, { headers }).then((r) =>
+      r.json()
+    );
+    assert.equal(prodWithNutrition.off_barcode, '0049000042566');
+    assert.equal(Number(prodWithNutrition.calories_kcal), 150);
+    assert.equal(prodWithNutrition.nutriscore_grade, 'b');
+
+    console.log('ALL SERVER v1.9.0 TESTS PASSED!');
     console.log('\nSample compact MCP inventory_summary output:\n' + summaryText);
     console.log('\nSample compact MCP search_inventory output:\n' + searchText);
   } finally {

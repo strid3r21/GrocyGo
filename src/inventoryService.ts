@@ -837,6 +837,7 @@ export class InventoryService {
       amount: number;
       location_id_from: number;
       location_id_to: number;
+      stock_entry_id?: number;
       photo_file_name?: string;
     },
     userId?: number | null
@@ -846,16 +847,29 @@ export class InventoryService {
       | undefined;
     const qty = Number(payload.amount);
     if (!Number.isFinite(qty) || qty <= 0) throw new Error('Transfer amount must be > 0');
-    if (payload.location_id_from === payload.location_id_to) {
-      throw new Error('Source and destination locations must be different');
+
+    let entries: any[];
+    let effectiveFromLocationId = Number(payload.location_id_from);
+
+    if (payload.stock_entry_id) {
+      entries = this.db
+        .prepare('SELECT * FROM stock WHERE id = ? AND product_id = ? AND amount > 0')
+        .all(payload.stock_entry_id, productId) as any[];
+      if (entries.length > 0) {
+        effectiveFromLocationId = Number(entries[0].location_id);
+      }
+    } else {
+      entries = this.db
+        .prepare(
+          `SELECT * FROM stock WHERE product_id = ? AND location_id = ? AND amount > 0
+           ORDER BY open DESC, COALESCE(NULLIF(best_before_date, ''), '2999-12-31') ASC, id ASC`
+        )
+        .all(productId, effectiveFromLocationId) as any[];
     }
 
-    const entries = this.db
-      .prepare(
-        `SELECT * FROM stock WHERE product_id = ? AND location_id = ? AND amount > 0
-         ORDER BY open DESC, COALESCE(NULLIF(best_before_date, ''), '2999-12-31') ASC, id ASC`
-      )
-      .all(productId, payload.location_id_from) as any[];
+    if (effectiveFromLocationId === Number(payload.location_id_to)) {
+      throw new Error('Source and destination locations must be different');
+    }
 
     const available = entries.reduce((sum, e) => sum + Number(e.amount), 0);
     if (available <= 0) {
@@ -906,7 +920,7 @@ export class InventoryService {
 
     const fromLoc = this.db
       .prepare('SELECT name FROM locations WHERE id = ?')
-      .get(payload.location_id_from) as { name: string } | undefined;
+      .get(effectiveFromLocationId) as { name: string } | undefined;
     const toLoc = this.db
       .prepare('SELECT name FROM locations WHERE id = ?')
       .get(payload.location_id_to) as { name: string } | undefined;
@@ -917,14 +931,14 @@ export class InventoryService {
       amount: moved,
       transactionType: 'transfer',
       locationId: payload.location_id_to,
-      note: `${fromLoc?.name || `#${payload.location_id_from}`} → ${toLoc?.name || `#${payload.location_id_to}`}`,
+      note: `${fromLoc?.name || `#${effectiveFromLocationId}`} → ${toLoc?.name || `#${payload.location_id_to}`}`,
       userId,
     });
 
     return {
       product_id: productId,
       transferred: moved,
-      location_id_from: payload.location_id_from,
+      location_id_from: effectiveFromLocationId,
       location_id_to: payload.location_id_to,
     };
   }
