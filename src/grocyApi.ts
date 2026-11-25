@@ -192,7 +192,7 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
       }
 
       if (method === 'GET' && pathname === '/api/health') {
-        sendJson(res, 200, { ok: true, service: 'grocygo-server', version: '1.2.0' });
+        sendJson(res, 200, { ok: true, service: 'grocygo-server', version: '1.5.0' });
         return;
       }
 
@@ -316,11 +316,32 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
         return;
       }
 
+      // ─── MCP Permission Settings (Admin toggleable anytime) ───
+      if (pathname === '/api/mcp/settings') {
+        if (method === 'GET') {
+          sendJson(res, 200, service.getMcpSettings());
+          return;
+        }
+        if (method === 'PUT') {
+          if (currentUser.role !== 'admin') {
+            sendError(res, 403, 'Admin permission required to update MCP settings');
+            return;
+          }
+          const body = await readJsonBody(req);
+          const updated = service.updateMcpSettings({
+            read_enabled: typeof body.read_enabled === 'boolean' ? body.read_enabled : undefined,
+            write_enabled: typeof body.write_enabled === 'boolean' ? body.write_enabled : undefined,
+          });
+          sendJson(res, 200, updated);
+          return;
+        }
+      }
+
       // ─── MCP Streamable HTTP Endpoint ─────────────────────────
       if (pathname === '/mcp') {
         if (method === 'POST') {
           const body = await readJsonBody(req);
-          const { status, response } = handleMcpJsonRpc(body, service);
+          const { status, response } = handleMcpJsonRpc(body, service, currentUser.id);
           if (response === null) {
             res.writeHead(status, { 'Access-Control-Allow-Origin': '*' });
             res.end();
@@ -344,9 +365,10 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
 
       // ─── System Info ──────────────────────────────────────────
       if (method === 'GET' && pathname === '/api/system/info') {
+        const mcpPerms = service.getMcpSettings();
         sendJson(res, 200, {
           grocy_version: {
-            Version: 'GrocyGo-Server 1.2.0',
+            Version: 'GrocyGo-Server 1.5.0',
             ReleaseDate: '2026-11-25',
           },
           php_version: `Node ${process.version}`,
@@ -362,6 +384,8 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
             multi_user: true,
             activity_log: true,
             mcp_endpoint: '/mcp',
+            mcp_read_enabled: mcpPerms.read_enabled,
+            mcp_write_enabled: mcpPerms.write_enabled,
           },
         });
         return;

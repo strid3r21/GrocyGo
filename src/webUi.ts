@@ -449,7 +449,30 @@ export function renderWebUiHtml(): string {
         </div>
 
         <div class="card">
-          <h3 style="margin-top:0;margin-bottom:6px;">Read-Only MCP Endpoint</h3>
+          <div class="between" style="margin-bottom:8px;">
+            <h3 style="margin:0;">MCP Server &amp; Permissions</h3>
+            <div id="mcpBadges" class="row" style="gap:6px;"></div>
+          </div>
+          <p class="muted" style="margin-top:0;margin-bottom:14px;">Control what connected AI assistants can read or edit via <code>/mcp</code>. Changes apply immediately.</p>
+          <div style="display:flex;flex-direction:column;gap:12px;margin-bottom:14px;padding:12px 14px;border:1px solid var(--border);border-radius:10px;background:var(--bg);">
+            <label class="row" style="align-items:flex-start;cursor:pointer;">
+              <input id="mcpReadToggle" type="checkbox" style="min-height:auto;width:20px;height:20px;margin-top:2px;" />
+              <div>
+                <strong>Allow Read Access</strong>
+                <div class="muted" style="font-size:13px;">AI can view inventory, groups, locations, shopping list, and household activity.</div>
+              </div>
+            </label>
+            <label class="row" style="align-items:flex-start;cursor:pointer;padding-top:10px;border-top:1px solid var(--border);">
+              <input id="mcpWriteToggle" type="checkbox" style="min-height:auto;width:20px;height:20px;margin-top:2px;" />
+              <div>
+                <strong>Allow Write Access</strong>
+                <div class="muted" style="font-size:13px;">AI can create groups, assign items to groups, edit item details, and add items to the shopping list.</div>
+              </div>
+            </label>
+          </div>
+          <div id="mcpAdminNote" class="muted hidden" style="font-size:13px;margin-bottom:10px;">Only Admin users can change MCP permissions.</div>
+          <div id="mcpStatus" class="hidden"></div>
+          <div id="mcpActiveTools" class="muted" style="font-size:13px;margin-bottom:10px;"></div>
           <pre id="mcpSnippet"></pre>
         </div>
       </div>
@@ -532,7 +555,7 @@ export function renderWebUiHtml(): string {
   <script>
     let apiKey = localStorage.getItem('grocygo_key') || '';
     let currentUser = null;
-    let state = { stock: [], products: [], groups: [], locations: [], units: [], shopping: [], keys: [], activity: [], users: [], backups: [] };
+    let state = { stock: [], products: [], groups: [], locations: [], units: [], shopping: [], keys: [], activity: [], users: [], backups: [], mcpSettings: { read_enabled: true, write_enabled: false } };
     let invViewMode = 'stock';
     let selectedIds = new Set();
     let editingProductId = null;
@@ -578,7 +601,7 @@ export function renderWebUiHtml(): string {
     };
 
     async function loadAll() {
-      const [me, stock, products, groups, locations, units, shopping, keys, activity, users, backups] = await Promise.all([
+      const [me, stock, products, groups, locations, units, shopping, keys, activity, users, backups, mcpSettings] = await Promise.all([
         api('/api/auth/me'),
         api('/api/stock'),
         api('/api/objects/products'),
@@ -590,9 +613,10 @@ export function renderWebUiHtml(): string {
         api('/api/activity?limit=80'),
         api('/api/users').catch(() => []),
         api('/api/backups').catch(() => []),
+        api('/api/mcp/settings').catch(() => ({ read_enabled: true, write_enabled: false })),
       ]);
       currentUser = me;
-      state = { stock, products, groups, locations, units, shopping, keys, activity, users, backups };
+      state = { stock, products, groups, locations, units, shopping, keys, activity, users, backups, mcpSettings };
       populateDropdowns();
       renderAll();
     }
@@ -866,6 +890,27 @@ export function renderWebUiHtml(): string {
         : '<div class="muted">No backups yet. Click Back Up Now to create one.</div>';
 
       // MCP & Keys
+      const mcp = state.mcpSettings || { read_enabled: true, write_enabled: false };
+      const isAdmin = currentUser && currentUser.role === 'admin';
+      const readChk = document.getElementById('mcpReadToggle');
+      const writeChk = document.getElementById('mcpWriteToggle');
+      readChk.checked = Boolean(mcp.read_enabled);
+      writeChk.checked = Boolean(mcp.write_enabled);
+      readChk.disabled = !isAdmin;
+      writeChk.disabled = !isAdmin;
+      document.getElementById('mcpAdminNote').classList.toggle('hidden', Boolean(isAdmin));
+      document.getElementById('mcpBadges').innerHTML =
+        '<span class="tag">' + (mcp.read_enabled ? 'Read: ON' : 'Read: OFF') + '</span>' +
+        '<span class="tag" style="' + (mcp.write_enabled ? 'background:var(--accent-soft);color:var(--accent);font-weight:700;' : '') + '">' +
+        (mcp.write_enabled ? 'Write: ON' : 'Write: OFF') + '</span>';
+
+      const enabledTools = [];
+      if (mcp.read_enabled) enabledTools.push('inventory_summary', 'search_inventory', 'get_item', 'list_locations', 'list_groups', 'get_shopping_list', 'recent_activity');
+      if (mcp.write_enabled) enabledTools.push('create_group', 'assign_items_to_group', 'update_item', 'add_to_shopping_list');
+      document.getElementById('mcpActiveTools').innerHTML = enabledTools.length
+        ? '<strong>Active MCP tools (' + enabledTools.length + '):</strong> ' + enabledTools.map((t) => '<code>' + t + '</code>').join(', ')
+        : '<strong>All MCP tools are currently disabled.</strong>';
+
       const origin = window.location.origin;
       document.getElementById('mcpSnippet').textContent = JSON.stringify(
         { mcpServers: { grocygo: { url: origin + '/mcp', headers: { 'GROCY-API-KEY': apiKey } } } },
@@ -1199,6 +1244,28 @@ export function renderWebUiHtml(): string {
       document.getElementById('locFreezerInput').checked = false;
       await loadAll();
     };
+    async function saveMcpSettings() {
+      const st = document.getElementById('mcpStatus');
+      try {
+        state.mcpSettings = await api('/api/mcp/settings', {
+          method: 'PUT',
+          body: JSON.stringify({
+            read_enabled: document.getElementById('mcpReadToggle').checked,
+            write_enabled: document.getElementById('mcpWriteToggle').checked,
+          }),
+        });
+        st.className = 'notice';
+        st.textContent = 'MCP permissions updated (Read: ' + (state.mcpSettings.read_enabled ? 'ON' : 'OFF') + ', Write: ' + (state.mcpSettings.write_enabled ? 'ON' : 'OFF') + ').';
+        renderAll();
+      } catch (e) {
+        st.className = 'notice err';
+        st.textContent = e.message;
+        await loadAll();
+      }
+    }
+    document.getElementById('mcpReadToggle').onchange = saveMcpSettings;
+    document.getElementById('mcpWriteToggle').onchange = saveMcpSettings;
+
     document.getElementById('createKeyBtn').onclick = async () => {
       await api('/api/objects/api_keys', { method: 'POST', body: JSON.stringify({ description: 'Generated from Web UI' }) });
       await loadAll();

@@ -1015,6 +1015,62 @@ export class InventoryService {
     return { product_id: productId, file_name: fileName };
   }
 
+  getMcpSettings(): { read_enabled: boolean; write_enabled: boolean } {
+    const rows = this.db
+      .prepare("SELECT key, value FROM server_settings WHERE key IN ('mcp_read_enabled', 'mcp_write_enabled')")
+      .all() as Array<{ key: string; value: string }>;
+    const map = new Map(rows.map((r) => [r.key, r.value]));
+    return {
+      read_enabled: map.get('mcp_read_enabled') !== '0',
+      write_enabled: map.get('mcp_write_enabled') === '1',
+    };
+  }
+
+  updateMcpSettings(payload: {
+    read_enabled?: boolean;
+    write_enabled?: boolean;
+  }): { read_enabled: boolean; write_enabled: boolean } {
+    const upsert = this.db.prepare(
+      `INSERT INTO server_settings (key, value, updated_at)
+       VALUES (?, ?, datetime('now'))
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`
+    );
+    if (typeof payload.read_enabled === 'boolean') {
+      upsert.run('mcp_read_enabled', payload.read_enabled ? '1' : '0');
+    }
+    if (typeof payload.write_enabled === 'boolean') {
+      upsert.run('mcp_write_enabled', payload.write_enabled ? '1' : '0');
+    }
+    return this.getMcpSettings();
+  }
+
+  createProductGroup(
+    name: string,
+    description = '',
+    userId?: number | null
+  ): { id: number; name: string; description: string } {
+    const cleanName = name.trim();
+    if (!cleanName) throw new Error('Group name is required');
+    const cleanDesc = (description || '').trim();
+    const existing = this.db
+      .prepare('SELECT id, name FROM product_groups WHERE LOWER(name) = LOWER(?) LIMIT 1')
+      .get(cleanName) as { id: number; name: string } | undefined;
+    if (existing) {
+      throw new Error(`Product group "${existing.name}" already exists (#${existing.id})`);
+    }
+    const info = this.db
+      .prepare('INSERT INTO product_groups (name, description, active) VALUES (?, ?, 1)')
+      .run(cleanName, cleanDesc);
+    const id = Number(info.lastInsertRowid);
+    this.logActivity({
+      itemLabel: cleanName,
+      amount: 0,
+      transactionType: 'group_create',
+      userId,
+    });
+    return { id, name: cleanName, description: cleanDesc };
+  }
+
   bulkAssignProductGroup(
     productIds: number[],
     groupId: number | null,

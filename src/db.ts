@@ -174,6 +174,12 @@ export function initDatabase(dataDir: string): DbContext {
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS server_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     CREATE INDEX IF NOT EXISTS idx_stock_product ON stock(product_id);
     CREATE INDEX IF NOT EXISTS idx_stock_location ON stock(location_id);
     CREATE INDEX IF NOT EXISTS idx_barcodes_code ON product_barcodes(barcode);
@@ -347,6 +353,10 @@ export function initDatabase(dataDir: string): DbContext {
       );
     }
   }
+
+  // Seed default MCP permission settings (Read ON, Write OFF by default)
+  db.prepare("INSERT OR IGNORE INTO server_settings (key, value) VALUES ('mcp_read_enabled', '1')").run();
+  db.prepare("INSERT OR IGNORE INTO server_settings (key, value) VALUES ('mcp_write_enabled', '0')").run();
 
   return { db, dataDir, photosDir, initialApiKey, initialAdminPassword };
 }

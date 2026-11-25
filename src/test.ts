@@ -159,7 +159,7 @@ async function runTests() {
     assert.equal(init.result.serverInfo.name, 'grocygo-mcp');
 
     const toolsList = await mcpCall(2, 'tools/list');
-    assert.equal(toolsList.result.tools.length, 6);
+    assert.equal(toolsList.result.tools.length, 7);
 
     const summary = await mcpCall(3, 'tools/call', { name: 'inventory_summary', arguments: {} });
     const summaryText: string = summary.result.content[0].text;
@@ -499,7 +499,89 @@ async function runTests() {
     }).then((r) => r.json());
     assert.equal(sarahNotifs.notifications.length, 0);
 
-    console.log('ALL SERVER v1.4.0 TESTS PASSED!');
+    // 17. Dynamic MCP Read/Write Permissions & Group Write Tools
+    const defaultMcpPerms = await fetch(`${base}/api/mcp/settings`, { headers }).then((r) => r.json());
+    assert.equal(defaultMcpPerms.read_enabled, true);
+    assert.equal(defaultMcpPerms.write_enabled, false);
+
+    // Write tool must be blocked when write_enabled is false
+    const blockedWrite = await mcpCall(20, 'tools/call', {
+      name: 'create_group',
+      arguments: { name: 'Dry Goods' },
+    });
+    assert.equal(blockedWrite.result.isError, true);
+    assert.ok(blockedWrite.result.content[0].text.includes('disabled'));
+
+    // Non-admin cannot change MCP settings
+    const forbiddenMcp = await fetch(`${base}/api/mcp/settings`, {
+      method: 'PUT',
+      headers: sarahHeaders,
+      body: JSON.stringify({ write_enabled: true }),
+    });
+    assert.equal(forbiddenMcp.status, 403);
+
+    // Admin turns Write ON
+    const enabledWrite = await fetch(`${base}/api/mcp/settings`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ read_enabled: true, write_enabled: true }),
+    }).then((r) => r.json());
+    assert.equal(enabledWrite.read_enabled, true);
+    assert.equal(enabledWrite.write_enabled, true);
+
+    const rwTools = await mcpCall(21, 'tools/list');
+    assert.equal(rwTools.result.tools.length, 11);
+
+    // AI creates group and assigns item to group
+    const createdGrp = await mcpCall(22, 'tools/call', {
+      name: 'create_group',
+      arguments: { name: 'Dry Goods', description: 'Shelf-stable grains and spices' },
+    });
+    assert.ok(!createdGrp.result.isError);
+    assert.ok(createdGrp.result.content[0].text.includes('Dry Goods'));
+
+    const assigned = await mcpCall(23, 'tools/call', {
+      name: 'assign_items_to_group',
+      arguments: { product_names: ['Smoked Paprika'], group_name: 'Dry Goods' },
+    });
+    assert.ok(!assigned.result.isError);
+    assert.ok(assigned.result.content[0].text.includes('Assigned 1 item to Dry Goods'));
+
+    const drySearch = await mcpCall(24, 'tools/call', {
+      name: 'search_inventory',
+      arguments: { group: 'Dry Goods' },
+    });
+    assert.ok(drySearch.result.content[0].text.includes('Smoked Paprika'));
+    assert.ok(drySearch.result.content[0].text.includes('[Dry Goods]'));
+
+    const groupsList = await mcpCall(25, 'tools/call', { name: 'list_groups', arguments: {} });
+    assert.ok(groupsList.result.content[0].text.includes('Dry Goods | items:1'));
+
+    // Admin turns BOTH Read and Write OFF -> 0 tools exposed and both blocked
+    await fetch(`${base}/api/mcp/settings`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ read_enabled: false, write_enabled: false }),
+    });
+    const noTools = await mcpCall(26, 'tools/list');
+    assert.equal(noTools.result.tools.length, 0);
+
+    const blockedRead = await mcpCall(27, 'tools/call', {
+      name: 'inventory_summary',
+      arguments: {},
+    });
+    assert.equal(blockedRead.result.isError, true);
+
+    // Turn Read back ON, keep Write OFF
+    await fetch(`${base}/api/mcp/settings`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ read_enabled: true, write_enabled: false }),
+    });
+    const readOnlyAgain = await mcpCall(28, 'tools/list');
+    assert.equal(readOnlyAgain.result.tools.length, 7);
+
+    console.log('ALL SERVER v1.5.0 TESTS PASSED!');
     console.log('\nSample compact MCP inventory_summary output:\n' + summaryText);
     console.log('\nSample compact MCP search_inventory output:\n' + searchText);
   } finally {
