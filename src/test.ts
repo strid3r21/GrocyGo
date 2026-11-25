@@ -4,6 +4,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { ensureDailyBackup, listDatabaseBackups, pruneOldBackups } from './backups';
 import { initDatabase } from './db';
 import { createRequestHandler } from './grocyApi';
 import { InventoryService } from './inventoryService';
@@ -434,6 +435,30 @@ async function runTests() {
     } finally {
       fs.rmSync(legacyMigDir, { recursive: true, force: true });
     }
+
+    // 15. Daily SQLite backup creation, download, and 7-day retention pruning
+    const createdDaily = ensureDailyBackup(ctx, 7);
+    assert.equal(createdDaily, true);
+    assert.equal(ensureDailyBackup(ctx, 7), false); // idempotent same day
+
+    const manualBackup = await fetch(`${base}/api/backups`, { method: 'POST', headers }).then((r) =>
+      r.json()
+    );
+    assert.ok(manualBackup.file_name.endsWith('.db'));
+
+    const dlBackup = await fetch(`${base}/api/backups/${manualBackup.file_name}`, { headers });
+    assert.equal(dlBackup.status, 200);
+    const dlBuf = Buffer.from(await dlBackup.arrayBuffer());
+    assert.ok(dlBuf.subarray(0, 15).toString('utf8').startsWith('SQLite format 3'));
+
+    // Verify retention prunes older backups beyond keepCount
+    const backupsDir = path.join(tmpDir, 'backups');
+    for (let i = 1; i <= 10; i++) {
+      const day = String(i).padStart(2, '0');
+      fs.writeFileSync(path.join(backupsDir, `grocygo-2025-01-${day}.db`), dlBuf);
+    }
+    pruneOldBackups(tmpDir, 7);
+    assert.equal(listDatabaseBackups(tmpDir).length, 7);
 
     console.log('ALL SERVER v1.3.0 TESTS PASSED!');
     console.log('\nSample compact MCP inventory_summary output:\n' + summaryText);

@@ -229,7 +229,7 @@ export function renderWebUiHtml(): string {
       <button data-tab="locations">Locations</button>
       <button data-tab="activity">Activity</button>
       <button data-tab="users" id="usersTabBtn" class="hidden">Users</button>
-      <button data-tab="import" id="importTabBtn" class="hidden">Import</button>
+      <button data-tab="import" id="importTabBtn" class="hidden">Import &amp; Backups</button>
       <button data-tab="keys">API &amp; MCP</button>
       <button id="logoutBtn" class="danger">Sign Out</button>
     </nav>
@@ -383,8 +383,20 @@ export function renderWebUiHtml(): string {
         </div>
       </div>
 
-      <!-- Import Tab -->
+      <!-- Import & Backups Tab -->
       <div id="tab-import" class="hidden">
+        <div class="card">
+          <div class="between" style="margin-bottom:8px;">
+            <div>
+              <h3 style="margin:0;">Automatic Daily Database Backups</h3>
+              <div class="muted">Runs automatically every day via atomic SQLite snapshots and keeps the last 7 backups in <code>/data/backups/</code>.</div>
+            </div>
+            <button id="backupNowBtn" class="primary sm">Back Up Now</button>
+          </div>
+          <div id="backupStatus" class="hidden"></div>
+          <div id="backupsList" style="margin-top:10px;"></div>
+        </div>
+
         <div class="card">
           <h3 style="margin-top:0;margin-bottom:6px;">Import from Running Grocy Server</h3>
           <div class="field">
@@ -520,7 +532,7 @@ export function renderWebUiHtml(): string {
   <script>
     let apiKey = localStorage.getItem('grocygo_key') || '';
     let currentUser = null;
-    let state = { stock: [], products: [], groups: [], locations: [], units: [], shopping: [], keys: [], activity: [], users: [] };
+    let state = { stock: [], products: [], groups: [], locations: [], units: [], shopping: [], keys: [], activity: [], users: [], backups: [] };
     let invViewMode = 'stock';
     let selectedIds = new Set();
     let editingProductId = null;
@@ -566,7 +578,7 @@ export function renderWebUiHtml(): string {
     };
 
     async function loadAll() {
-      const [me, stock, products, groups, locations, units, shopping, keys, activity, users] = await Promise.all([
+      const [me, stock, products, groups, locations, units, shopping, keys, activity, users, backups] = await Promise.all([
         api('/api/auth/me'),
         api('/api/stock'),
         api('/api/objects/products'),
@@ -577,9 +589,10 @@ export function renderWebUiHtml(): string {
         api('/api/objects/api_keys'),
         api('/api/activity?limit=80'),
         api('/api/users').catch(() => []),
+        api('/api/backups').catch(() => []),
       ]);
       currentUser = me;
-      state = { stock, products, groups, locations, units, shopping, keys, activity, users };
+      state = { stock, products, groups, locations, units, shopping, keys, activity, users, backups };
       populateDropdowns();
       renderAll();
     }
@@ -836,6 +849,22 @@ export function renderWebUiHtml(): string {
           </div>\`)
         .join('');
 
+      // Backups list
+      document.getElementById('backupsList').innerHTML = state.backups.length
+        ? state.backups
+            .map((b) => \`
+              <div class="between" style="padding:10px 0;border-top:1px solid var(--border);">
+                <div>
+                  <code style="font-size:13px;">\${escapeHtml(b.file_name)}</code>
+                  <div class="muted">\${Math.max(1, Math.round(b.size_bytes / 1024))} KB · \${escapeHtml(formatTime(b.created_at))}</div>
+                </div>
+                <a href="/api/backups/\${encodeURIComponent(b.file_name)}?api_key=\${encodeURIComponent(apiKey)}" style="text-decoration:none;">
+                  <button class="sm" type="button">Download</button>
+                </a>
+              </div>\`)
+            .join('')
+        : '<div class="muted">No backups yet. Click Back Up Now to create one.</div>';
+
       // MCP & Keys
       const origin = window.location.origin;
       document.getElementById('mcpSnippet').textContent = JSON.stringify(
@@ -1050,6 +1079,21 @@ export function renderWebUiHtml(): string {
         st.className = 'notice';
         st.textContent = 'Password updated.';
       } catch (e) { st.className = 'notice err'; st.textContent = e.message; }
+    };
+
+    document.getElementById('backupNowBtn').onclick = async () => {
+      const btn = document.getElementById('backupNowBtn');
+      const st = document.getElementById('backupStatus');
+      btn.disabled = true;
+      try {
+        const res = await api('/api/backups', { method: 'POST', body: '{}' });
+        st.className = 'notice';
+        st.textContent = 'Created backup ' + res.file_name;
+        await loadAll();
+      } catch (e) {
+        st.className = 'notice err';
+        st.textContent = e.message;
+      } finally { btn.disabled = false; }
     };
 
     document.getElementById('runApiImportBtn').onclick = async () => {

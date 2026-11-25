@@ -3,6 +3,12 @@ import http from 'node:http';
 import path from 'node:path';
 import QRCode from 'qrcode';
 import { generateApiKey } from './auth';
+import {
+  createDatabaseBackup,
+  getBackupsDir,
+  listDatabaseBackups,
+  sanitizeBackupName,
+} from './backups';
 import { DbContext } from './db';
 import { importFromGrocyApi, importFromGrocySqliteBuffer } from './grocyImport';
 import { InventoryService } from './inventoryService';
@@ -393,6 +399,53 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
         const dbBuf = await readBodyBuffer(req, 60 * 1024 * 1024);
         const report = await importFromGrocySqliteBuffer(ctx, dbBuf, { clearExisting });
         sendJson(res, 200, report);
+        return;
+      }
+
+      // ─── Automatic & On-Demand SQLite Backups (Admin) ─────────
+      if (method === 'GET' && pathname === '/api/backups') {
+        if (currentUser.role !== 'admin') {
+          sendError(res, 403, 'Admin permission required to view backups');
+          return;
+        }
+        sendJson(res, 200, listDatabaseBackups(ctx.dataDir));
+        return;
+      }
+
+      if (method === 'POST' && pathname === '/api/backups') {
+        if (currentUser.role !== 'admin') {
+          sendError(res, 403, 'Admin permission required to create backups');
+          return;
+        }
+        const created = createDatabaseBackup(ctx, { manual: true });
+        sendJson(res, 200, created);
+        return;
+      }
+
+      const backupDownloadMatch = pathname.match(/^\/api\/backups\/([^/]+)$/);
+      if (method === 'GET' && backupDownloadMatch) {
+        if (currentUser.role !== 'admin') {
+          sendError(res, 403, 'Admin permission required to download backups');
+          return;
+        }
+        const safeName = sanitizeBackupName(decodeURIComponent(backupDownloadMatch[1]));
+        if (!safeName) {
+          sendError(res, 400, 'Invalid backup filename');
+          return;
+        }
+        const fullPath = path.join(getBackupsDir(ctx.dataDir), safeName);
+        if (!fs.existsSync(fullPath)) {
+          sendError(res, 404, 'Backup not found');
+          return;
+        }
+        const stat = fs.statSync(fullPath);
+        res.writeHead(200, {
+          'Content-Type': 'application/octet-stream',
+          'Content-Disposition': `attachment; filename="${safeName}"`,
+          'Content-Length': stat.size,
+          'Access-Control-Allow-Origin': '*',
+        });
+        fs.createReadStream(fullPath).pipe(res);
         return;
       }
 

@@ -1,5 +1,6 @@
 import http from 'node:http';
 import path from 'node:path';
+import { startDailyBackupScheduler } from './backups';
 import { initDatabase } from './db';
 import { createRequestHandler } from './grocyApi';
 import { InventoryService } from './inventoryService';
@@ -11,6 +12,7 @@ const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(__dirname, '..',
 export function startServer(port = PORT, host = HOST, dataDir = DATA_DIR) {
   const ctx = initDatabase(dataDir);
   const service = new InventoryService(ctx);
+  const backupTimer = startDailyBackupScheduler(ctx);
   const handler = createRequestHandler(ctx, service);
   const server = http.createServer(handler);
 
@@ -33,6 +35,7 @@ export function startServer(port = PORT, host = HOST, dataDir = DATA_DIR) {
   });
 
   const shutdown = () => {
+    clearInterval(backupTimer);
     server.close(() => {
       try {
         ctx.db.close();
