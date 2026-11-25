@@ -309,6 +309,16 @@ export class InventoryService {
           p.*,
           SUM(s.amount) AS total_amount,
           SUM(CASE WHEN s.open = 1 THEN s.amount ELSE 0 END) AS opened_amount,
+          MIN(CASE WHEN s.open = 1 THEN NULLIF(s.opened_date, '') ELSE NULL END) AS earliest_opened_date,
+          MIN(
+            CASE
+              WHEN s.open = 1 THEN COALESCE(
+                NULLIF(s.opened_use_by_date, ''),
+                CASE WHEN s.opened_date IS NOT NULL AND s.opened_date != '' THEN date(s.opened_date, '+14 days') ELSE NULL END
+              )
+              ELSE NULL
+            END
+          ) AS earliest_opened_use_by,
           MIN(COALESCE(NULLIF(s.best_before_date, ''), '2999-12-31')) AS next_due_date,
           MAX(s.row_created_timestamp) AS last_added_at,
           (
@@ -347,6 +357,8 @@ export class InventoryService {
       const {
         total_amount,
         opened_amount,
+        earliest_opened_date,
+        earliest_opened_use_by,
         next_due_date,
         last_added_at,
         last_added_by,
@@ -361,6 +373,8 @@ export class InventoryService {
         amount_aggregated: Number(total_amount || 0),
         amount_opened: Number(opened_amount || 0),
         amount_opened_aggregated: Number(opened_amount || 0),
+        opened_date: Number(opened_amount || 0) > 0 ? earliest_opened_date || null : null,
+        opened_use_by_date: Number(opened_amount || 0) > 0 ? earliest_opened_use_by || null : null,
         best_before_date: next_due_date || NEVER_EXPIRES,
         last_added_at: last_added_at || product.row_created_timestamp || null,
         last_added_by: last_added_by || null,
@@ -761,12 +775,21 @@ export class InventoryService {
     return { product_id: productId, consumed: consumedTotal };
   }
 
-  openProduct(productId: number, amount = 1, userId?: number | null) {
-    const product = this.db.prepare('SELECT name FROM products WHERE id = ?').get(productId) as
-      | { name: string }
+  openProduct(productId: number, amount = 1, userId?: number | null, days?: number) {
+    const product = this.db
+      .prepare('SELECT name, default_best_before_days_after_open FROM products WHERE id = ?')
+      .get(productId) as
+      | { name: string; default_best_before_days_after_open: number }
       | undefined;
     const qty = Number(amount);
     if (!Number.isFinite(qty) || qty <= 0) throw new Error('Amount must be greater than 0');
+
+    const countdownDays =
+      days && Number.isFinite(Number(days)) && Number(days) > 0
+        ? Math.round(Number(days))
+        : product && Number(product.default_best_before_days_after_open) > 0
+        ? Number(product.default_best_before_days_after_open)
+        : 14;
 
     const unopened = this.db
       .prepare(
@@ -780,6 +803,7 @@ export class InventoryService {
     }
 
     const today = todayIso();
+    const useByDate = addDaysIso(countdownDays);
     let remaining = qty;
 
     for (const entry of unopened) {
@@ -788,8 +812,8 @@ export class InventoryService {
       if (entryAmt <= remaining + 1e-9) {
         remaining = Math.max(0, Math.round((remaining - entryAmt) * 1000) / 1000);
         this.db
-          .prepare('UPDATE stock SET open = 1, opened_date = ? WHERE id = ?')
-          .run(today, entry.id);
+          .prepare('UPDATE stock SET open = 1, opened_date = ?, opened_use_by_date = ? WHERE id = ?')
+          .run(today, useByDate, entry.id);
       } else {
         const leftover = Math.round((entryAmt - remaining) * 1000) / 1000;
         this.db.prepare('UPDATE stock SET amount = ? WHERE id = ?').run(leftover, entry.id);
@@ -797,8 +821,8 @@ export class InventoryService {
           .prepare(
             `INSERT INTO stock (
               product_id, amount, best_before_date, purchased_date, stock_id,
-              price, open, opened_date, location_id, shopping_location_id, note, photo_file_name, added_by_user_id
-            ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)`
+              price, open, opened_date, opened_use_by_date, location_id, shopping_location_id, note, photo_file_name, added_by_user_id
+            ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)`
           )
           .run(
             productId,
@@ -808,6 +832,7 @@ export class InventoryService {
             crypto.randomBytes(8).toString('hex'),
             entry.price,
             today,
+            useByDate,
             entry.location_id,
             entry.shopping_location_id,
             entry.note,
@@ -825,10 +850,76 @@ export class InventoryService {
       amount: opened,
       transactionType: 'open',
       locationId: unopened[0]?.location_id ?? null,
+      note: `${countdownDays}d countdown`,
       userId,
     });
 
-    return { product_id: productId, opened };
+    return { product_id: productId, opened, opened_use_by_date: useByDate };
+  }
+
+  extendOpenedProduct(
+    productId: number,
+    days = 7,
+    stockEntryId?: number,
+    userId?: number | null
+  ) {
+    const product = this.db.prepare('SELECT name FROM products WHERE id = ?').get(productId) as
+      | { name: string }
+      | undefined;
+    if (!product) throw new Error(`Product ${productId} not found`);
+
+    const extDays = Math.max(1, Math.round(Number(days) || 7));
+    const entries = stockEntryId
+      ? (this.db
+          .prepare('SELECT * FROM stock WHERE id = ? AND product_id = ? AND open = 1 AND amount > 0')
+          .all(stockEntryId, productId) as any[])
+      : (this.db
+          .prepare('SELECT * FROM stock WHERE product_id = ? AND open = 1 AND amount > 0')
+          .all(productId) as any[]);
+
+    if (entries.length === 0) {
+      throw new Error('No opened stock available to extend');
+    }
+
+    const today = todayIso();
+    const addDaysToIso = (iso: string, d: number): string => {
+      const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})/);
+      if (!m) return addDaysIso(d);
+      const dt = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+      dt.setDate(dt.getDate() + d);
+      const y = dt.getFullYear();
+      const mo = String(dt.getMonth() + 1).padStart(2, '0');
+      const da = String(dt.getDate()).padStart(2, '0');
+      return `${y}-${mo}-${da}`;
+    };
+
+    let latestUseBy = addDaysIso(extDays);
+    const updateStmt = this.db.prepare('UPDATE stock SET opened_use_by_date = ? WHERE id = ?');
+    for (const e of entries) {
+      const existingUseBy =
+        (e.opened_use_by_date && String(e.opened_use_by_date).trim()) ||
+        (e.opened_date ? addDaysToIso(String(e.opened_date).trim(), 14) : today);
+      const base = existingUseBy > today ? existingUseBy : today;
+      const nextUseBy = addDaysToIso(base, extDays);
+      updateStmt.run(nextUseBy, e.id);
+      latestUseBy = nextUseBy;
+    }
+
+    this.logActivity({
+      productId,
+      itemLabel: product.name,
+      amount: entries.reduce((sum, e) => sum + Number(e.amount || 0), 0),
+      transactionType: 'open_extend',
+      locationId: entries[0]?.location_id ?? null,
+      note: `+${extDays} days (until ${latestUseBy})`,
+      userId,
+    });
+
+    return {
+      product_id: productId,
+      extended: entries.length,
+      opened_use_by_date: latestUseBy,
+    };
   }
 
   inventoryProduct(

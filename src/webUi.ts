@@ -884,6 +884,7 @@ export function renderWebUiHtml(): string {
       consume: 'used',
       spoiled: 'marked spoiled',
       open: 'opened',
+      open_extend: 'extended opened timer for',
       transfer: 'moved',
       shopping_add: 'added to shopping list:',
       shopping_done: 'checked off:',

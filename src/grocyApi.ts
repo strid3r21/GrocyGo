@@ -751,7 +751,7 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
       }
 
       const prodStockMatch = pathname.match(
-        /^\/api\/stock\/products\/(\d+)(?:\/(entries|locations|add|consume|open|inventory|transfer))?$/
+        /^\/api\/stock\/products\/(\d+)(?:\/(entries|locations|add|consume|open|open-extend|inventory|transfer))?$/
       );
       if (prodStockMatch) {
         const productId = Number(prodStockMatch[1]);
@@ -791,7 +791,26 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
 
         if (sub === 'open' && method === 'POST') {
           const body = await readJsonBody(req);
-          sendJson(res, 200, service.openProduct(productId, body.amount ?? 1, currentUser.id));
+          sendJson(
+            res,
+            200,
+            service.openProduct(productId, body.amount ?? 1, currentUser.id, body.days)
+          );
+          return;
+        }
+
+        if (sub === 'open-extend' && method === 'POST') {
+          const body = await readJsonBody(req);
+          sendJson(
+            res,
+            200,
+            service.extendOpenedProduct(
+              productId,
+              body.days ?? 7,
+              body.stock_entry_id ? Number(body.stock_entry_id) : undefined,
+              currentUser.id
+            )
+          );
           return;
         }
 

@@ -859,7 +859,35 @@ async function runTests() {
     const delActivity = await fetch(`${base}/api/activity?limit=5`, { headers }).then((r) => r.json());
     assert.ok(delActivity.some((e: any) => e.transaction_type === 'bulk_delete' && e.product_name === '2 items'));
 
-    console.log('ALL SERVER v1.9.2 TESTS PASSED!');
+    // 24. Opened items 14-day countdown + extend +7 days (rinse & repeat)
+    const openRes = await fetch(`${base}/api/stock/products/${prodId}/open`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ amount: 1 }),
+    }).then((r) => r.json());
+    assert.equal(openRes.opened, 1);
+    assert.ok(openRes.opened_use_by_date, 'Opening an item must set a 14-day opened_use_by_date');
+
+    const stockAfterOpen = await fetch(`${base}/api/stock`, { headers }).then((r) => r.json());
+    const openedItem = stockAfterOpen.find((s: any) => s.product_id === prodId);
+    assert.ok(openedItem.amount_opened >= 1);
+    assert.equal(openedItem.opened_use_by_date, openRes.opened_use_by_date);
+
+    const ext1 = await fetch(`${base}/api/stock/products/${prodId}/open-extend`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ days: 7 }),
+    }).then((r) => r.json());
+    assert.ok(ext1.opened_use_by_date > openRes.opened_use_by_date, 'First +7d extend advances deadline');
+
+    const ext2 = await fetch(`${base}/api/stock/products/${prodId}/open-extend`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ days: 7 }),
+    }).then((r) => r.json());
+    assert.ok(ext2.opened_use_by_date > ext1.opened_use_by_date, 'Second +7d extend advances deadline again');
+
+    console.log('ALL SERVER v1.9.3 TESTS PASSED!');
     console.log('\nSample compact MCP inventory_summary output:\n' + summaryText);
     console.log('\nSample compact MCP search_inventory output:\n' + searchText);
   } finally {

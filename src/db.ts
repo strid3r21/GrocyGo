@@ -131,6 +131,7 @@ export function initDatabase(dataDir: string): DbContext {
       price REAL DEFAULT NULL,
       open INTEGER NOT NULL DEFAULT 0,
       opened_date TEXT DEFAULT NULL,
+      opened_use_by_date TEXT DEFAULT NULL,
       location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE RESTRICT,
       shopping_location_id INTEGER REFERENCES shopping_locations(id) ON DELETE SET NULL,
       note TEXT DEFAULT '',
@@ -224,6 +225,9 @@ export function initDatabase(dataDir: string): DbContext {
   }
   if (!hasColumn(db, 'stock', 'added_by_user_id')) {
     db.exec('ALTER TABLE stock ADD COLUMN added_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL;');
+  }
+  if (!hasColumn(db, 'stock', 'opened_use_by_date')) {
+    db.exec('ALTER TABLE stock ADD COLUMN opened_use_by_date TEXT DEFAULT NULL;');
   }
   if (!hasColumn(db, 'stock_log', 'user_id')) {
     db.exec('ALTER TABLE stock_log ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE SET NULL;');
