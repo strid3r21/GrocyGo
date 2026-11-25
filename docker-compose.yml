@@ -1,0 +1,15 @@
+services:
+  grocygo-server:
+    build:
+      context: .
+    container_name: grocygo-server
+    restart: unless-stopped
+    ports:
+      - "9283:9283"
+    environment:
+      PORT: "9283"
+      DATA_DIR: "/data"
+      # Optional: set a fixed initial API key (otherwise one is auto-generated on first boot)
+      # INITIAL_API_KEY: "your-secret-api-key"
+    volumes:
+      - ./data:/data

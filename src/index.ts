@@ -1,0 +1,52 @@
+import http from 'node:http';
+import path from 'node:path';
+import { initDatabase } from './db';
+import { createRequestHandler } from './grocyApi';
+import { InventoryService } from './inventoryService';
+
+const PORT = Number(process.env.PORT || 9283);
+const HOST = process.env.HOST || '0.0.0.0';
+const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(__dirname, '..', 'data'));
+
+export function startServer(port = PORT, host = HOST, dataDir = DATA_DIR) {
+  const ctx = initDatabase(dataDir);
+  const service = new InventoryService(ctx);
+  const handler = createRequestHandler(ctx, service);
+  const server = http.createServer(handler);
+
+  server.listen(port, host, () => {
+    console.log('');
+    console.log('===============================================');
+    console.log('  GrocyGo Server v1.1.0 (Food Inventory + MCP)');
+    console.log('===============================================');
+    console.log(`  Web UI & API : http://${host === '0.0.0.0' ? 'localhost' : host}:${port}`);
+    console.log(`  MCP Endpoint : http://${host === '0.0.0.0' ? 'localhost' : host}:${port}/mcp`);
+    console.log(`  Data Dir     : ${dataDir}`);
+    if (ctx.initialApiKey) {
+      console.log(`  Initial Key  : ${ctx.initialApiKey}`);
+      console.log('  (Save this API key for the GrocyGo mobile app & MCP clients)');
+    }
+    console.log('===============================================');
+    console.log('');
+  });
+
+  const shutdown = () => {
+    server.close(() => {
+      try {
+        ctx.db.close();
+      } catch {
+        // ignore
+      }
+      process.exit(0);
+    });
+  };
+
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
+
+  return { server, ctx, service };
+}
+
+if (require.main === module) {
+  startServer();
+}
