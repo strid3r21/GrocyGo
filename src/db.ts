@@ -196,6 +196,40 @@ export function initDatabase(dataDir: string): DbContext {
     db.exec('ALTER TABLE shopping_list ADD COLUMN completed_at TEXT DEFAULT NULL;');
   }
 
+  // Migrate legacy stock_log tables created in v1.1.0 where product_id had a NOT NULL constraint
+  const stockLogCols = db.prepare('PRAGMA table_info(stock_log)').all() as Array<{
+    name: string;
+    notnull: number;
+  }>;
+  const prodIdCol = stockLogCols.find((c) => c.name === 'product_id');
+  if (prodIdCol && prodIdCol.notnull === 1) {
+    db.exec(`
+      BEGIN TRANSACTION;
+      CREATE TABLE stock_log_migrated (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        product_id INTEGER,
+        item_label TEXT DEFAULT '',
+        amount REAL NOT NULL DEFAULT 0,
+        transaction_type TEXT NOT NULL,
+        location_id INTEGER,
+        spoiled INTEGER NOT NULL DEFAULT 0,
+        note TEXT DEFAULT '',
+        user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        row_created_timestamp TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      INSERT INTO stock_log_migrated (
+        id, product_id, item_label, amount, transaction_type, location_id, spoiled, note, user_id, row_created_timestamp
+      )
+      SELECT
+        id, product_id, COALESCE(item_label, ''), amount, transaction_type, location_id, spoiled, COALESCE(note, ''), user_id, row_created_timestamp
+      FROM stock_log;
+      DROP TABLE stock_log;
+      ALTER TABLE stock_log_migrated RENAME TO stock_log;
+      CREATE INDEX IF NOT EXISTS idx_stock_log_time ON stock_log(id DESC);
+      COMMIT;
+    `);
+  }
+
   // Ensure default admin user exists
   let initialAdminPassword: string | null = null;
   let defaultAdmin = db

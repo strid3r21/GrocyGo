@@ -397,6 +397,44 @@ async function runTests() {
     const stockOverview = await fetch(`${base}/api/stock`, { headers }).then((r) => r.json());
     assert.ok(stockOverview[0].last_added_at);
 
+    // 14. Regression test: legacy v1.1.0 stock_log (product_id NOT NULL) migrates cleanly
+    const legacyMigDir = fs.mkdtempSync(path.join(os.tmpdir(), 'grocygo-mig-test-'));
+    try {
+      const legacyMigDb = new DatabaseSync(path.join(legacyMigDir, 'grocygo.db'));
+      legacyMigDb.exec(`
+        CREATE TABLE stock_log (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          product_id INTEGER NOT NULL,
+          amount REAL NOT NULL,
+          transaction_type TEXT NOT NULL,
+          location_id INTEGER,
+          spoiled INTEGER NOT NULL DEFAULT 0,
+          note TEXT DEFAULT '',
+          row_created_timestamp TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        INSERT INTO stock_log (product_id, amount, transaction_type) VALUES (1, 2, 'purchase');
+      `);
+      legacyMigDb.close();
+
+      const migratedCtx = initDatabase(legacyMigDir);
+      const migService = new InventoryService(migratedCtx);
+      // Bulk group log with null product_id must succeed after migration
+      migService.logActivity({
+        productId: null,
+        itemLabel: '3 items',
+        amount: 3,
+        transactionType: 'bulk_group',
+        note: 'Group: Dry',
+      });
+      const migratedRows = migratedCtx.db.prepare('SELECT COUNT(*) AS c FROM stock_log').get() as {
+        c: number;
+      };
+      assert.equal(migratedRows.c, 2);
+      migratedCtx.db.close();
+    } finally {
+      fs.rmSync(legacyMigDir, { recursive: true, force: true });
+    }
+
     console.log('ALL SERVER v1.3.0 TESTS PASSED!');
     console.log('\nSample compact MCP inventory_summary output:\n' + summaryText);
     console.log('\nSample compact MCP search_inventory output:\n' + searchText);
