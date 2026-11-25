@@ -322,8 +322,11 @@ export class InventoryService {
           (
             SELECT s2.photo_file_name
             FROM stock s2
-            WHERE s2.product_id = p.id AND s2.photo_file_name IS NOT NULL AND s2.photo_file_name != ''
-            ORDER BY s2.id DESC
+            WHERE s2.product_id = p.id
+              AND s2.amount > 0
+              AND s2.photo_file_name IS NOT NULL
+              AND s2.photo_file_name != ''
+            ORDER BY COALESCE(NULLIF(s2.best_before_date, ''), '2999-12-31') ASC, s2.id DESC
             LIMIT 1
           ) AS latest_stock_photo,
           (
