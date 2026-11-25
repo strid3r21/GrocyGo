@@ -214,6 +214,48 @@ export function renderWebUiHtml(): string {
       gap: 12px;
     }
     .chk-big { width: 22px; height: 22px; min-height: auto; cursor: pointer; accent-color: var(--primary); }
+    .label-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; align-items: start; }
+    .label-preview-stage {
+      background: var(--bg);
+      border: 1px dashed var(--border);
+      border-radius: 12px;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      margin: 12px 0;
+    }
+    .label-card-2x1 {
+      width: 300px;
+      height: 150px;
+      background: #ffffff;
+      color: #000000;
+      border: 1px solid #c8c2b8;
+      border-radius: 6px;
+      padding: 8px 10px;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+    .label-card-1x2 {
+      width: 150px;
+      height: 300px;
+      background: #ffffff;
+      color: #000000;
+      border: 1px solid #c8c2b8;
+      border-radius: 6px;
+      padding: 10px 8px;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
   </style>
 </head>
 <body>
@@ -226,6 +268,7 @@ export function renderWebUiHtml(): string {
     <nav id="navTabs" class="hidden" aria-label="Main navigation">
       <button data-tab="inventory" class="active">Inventory</button>
       <button data-tab="shopping">Shopping</button>
+      <button data-tab="labels">Labels</button>
       <button data-tab="locations">Locations</button>
       <button data-tab="activity">Activity</button>
       <button data-tab="users" id="usersTabBtn" class="hidden">Users</button>
@@ -335,6 +378,108 @@ export function renderWebUiHtml(): string {
           </div>
         </div>
         <div id="shoppingList"></div>
+      </div>
+
+      <!-- Labels Tab (1" x 2" Printable QR / Barcode Labels + Create Matching Item) -->
+      <div id="tab-labels" class="hidden">
+        <div class="label-grid">
+          <div class="card">
+            <div class="between" style="margin-bottom:8px;">
+              <h3 style="margin:0;">1&Prime; &times; 2&Prime; Label Creator</h3>
+              <button id="genLabelCodeBtn" class="sm" type="button">New Code</button>
+            </div>
+            <p class="muted" style="margin-top:0;">Print a crisp QR code or Code 128 barcode onto a 1&Prime;&times;2&Prime; label for items without a barcode.</p>
+
+            <div class="field">
+              <label for="labelExistingProd">Load Existing Item (optional)</label>
+              <select id="labelExistingProd"></select>
+            </div>
+
+            <div class="row" style="gap:10px;">
+              <div class="field" style="flex:1.4;">
+                <label for="labelCodeInput">Label Code</label>
+                <input id="labelCodeInput" placeholder="GG-XXXXXX" />
+              </div>
+              <div class="field" style="flex:1;">
+                <label for="labelFormatSelect">Code Type</label>
+                <select id="labelFormatSelect">
+                  <option value="qr">QR Code</option>
+                  <option value="barcode">Barcode (Code 128)</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="field">
+              <label for="labelTitleInput">Label Title (printed on label)</label>
+              <input id="labelTitleInput" placeholder="e.g. Homemade Tomato Soup" />
+            </div>
+
+            <div class="row" style="gap:10px;">
+              <div class="field" style="flex:1.3;">
+                <label for="labelSubInput">Note / Date (optional)</label>
+                <input id="labelSubInput" placeholder="e.g. Made 2026-11-25" />
+              </div>
+              <div class="field" style="flex:1;">
+                <label for="labelOrientSelect">Label Size</label>
+                <select id="labelOrientSelect">
+                  <option value="2x1">2&Prime; &times; 1&Prime; (Landscape)</option>
+                  <option value="1x2">1&Prime; &times; 2&Prime; (Portrait)</option>
+                </select>
+              </div>
+              <div class="field" style="width:76px;">
+                <label for="labelCopiesInput">Copies</label>
+                <input id="labelCopiesInput" type="number" min="1" max="20" value="1" />
+              </div>
+            </div>
+
+            <div class="label-preview-stage">
+              <div id="labelPreviewCard" class="label-card-2x1"></div>
+              <div class="muted" style="font-size:12px;">Live preview (prints exact 2&Prime;&times;1&Prime; / 1&Prime;&times;2&Prime; vector SVG)</div>
+            </div>
+
+            <button id="printLabelBtn" class="primary" style="width:100%;" type="button">Print 1&Prime; &times; 2&Prime; Label</button>
+          </div>
+
+          <div class="card">
+            <h3 style="margin-top:0;margin-bottom:6px;">Create Matching Item</h3>
+            <p class="muted" style="margin-top:0;">Create a new inventory item linked to this QR/Barcode right here — or just stick the label on the container and scan it with the GrocyGo mobile app.</p>
+
+            <div class="field">
+              <label for="lblItemName">Item Name</label>
+              <input id="lblItemName" placeholder="e.g. Homemade Tomato Soup" />
+            </div>
+            <div class="field">
+              <label for="lblItemCode">Linked QR / Barcode</label>
+              <input id="lblItemCode" readonly style="opacity:0.85;font-family:monospace;" />
+            </div>
+            <div class="row" style="gap:10px;">
+              <div class="field" style="flex:1;">
+                <label for="lblItemLocation">Location</label>
+                <select id="lblItemLocation"></select>
+              </div>
+              <div class="field" style="flex:1;">
+                <label for="lblItemGroup">Group</label>
+                <select id="lblItemGroup"></select>
+              </div>
+            </div>
+            <div class="row" style="gap:10px;">
+              <div class="field" style="flex:1;">
+                <label for="lblItemQty">Initial Qty</label>
+                <input id="lblItemQty" type="number" min="0" step="0.25" value="1" />
+              </div>
+              <div class="field" style="flex:1;">
+                <label for="lblItemUnit">Unit</label>
+                <select id="lblItemUnit"></select>
+              </div>
+            </div>
+            <div class="field">
+              <label for="lblItemExpiry">Expiration / Best-Before Date (optional)</label>
+              <input id="lblItemExpiry" type="date" />
+            </div>
+            <button id="createLabeledItemBtn" class="primary" style="width:100%;" type="button">Create Item &amp; Link Code</button>
+            <div id="labelItemStatus" class="hidden"></div>
+          </div>
+        </div>
       </div>
 
       <!-- Locations Tab -->
@@ -526,7 +671,10 @@ export function renderWebUiHtml(): string {
         <div id="editPhotosRow" class="row" style="gap:10px;align-items:stretch;"></div>
       </div>
       <div id="editErr" class="hidden"></div>
-      <button id="saveEditBtn" class="primary" style="width:100%;margin-top:6px;">Save Changes</button>
+      <div class="row" style="gap:8px;margin-top:6px;">
+        <button id="editPrintLabelBtn" type="button" style="flex:1;">Create Label</button>
+        <button id="saveEditBtn" class="primary" style="flex:1.6;">Save Changes</button>
+      </div>
     </div>
   </div>
 
@@ -567,7 +715,7 @@ export function renderWebUiHtml(): string {
   <script>
     let apiKey = localStorage.getItem('grocygo_key') || '';
     let currentUser = null;
-    let state = { stock: [], products: [], groups: [], locations: [], units: [], shopping: [], keys: [], activity: [], users: [], backups: [], mcpSettings: { read_enabled: true, write_enabled: false } };
+    let state = { stock: [], products: [], barcodes: [], groups: [], locations: [], units: [], shopping: [], keys: [], activity: [], users: [], backups: [], mcpSettings: { read_enabled: true, write_enabled: false } };
     let invViewMode = 'stock';
     let selectedIds = new Set();
     let editingProductId = null;
@@ -589,8 +737,34 @@ export function renderWebUiHtml(): string {
       return data;
     }
 
-    function photoUrl(file) {
-      return '/api/photos/' + encodeURIComponent(file) + '?api_key=' + encodeURIComponent(apiKey);
+    function photoUrl(file, thumb = false) {
+      return '/api/photos/' + encodeURIComponent(file) + '?api_key=' + encodeURIComponent(apiKey) + (thumb ? '&thumb=1' : '');
+    }
+
+    async function compressImageFile(file) {
+      if (!file || !file.type || !file.type.startsWith('image/')) return { blob: file, type: file?.type || 'image/jpeg' };
+      try {
+        const bitmap = await createImageBitmap(file);
+        const maxDim = 1280;
+        let w = bitmap.width;
+        let h = bitmap.height;
+        if (w > maxDim || h > maxDim) {
+          const scale = maxDim / Math.max(w, h);
+          w = Math.max(1, Math.round(w * scale));
+          h = Math.max(1, Math.round(h * scale));
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx2d = canvas.getContext('2d');
+        ctx2d.drawImage(bitmap, 0, 0, w, h);
+        bitmap.close();
+        const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.82));
+        if (blob && blob.size > 0 && blob.size < file.size) {
+          return { blob, type: 'image/jpeg' };
+        }
+      } catch {}
+      return { blob: file, type: file.type || 'image/jpeg' };
     }
 
     function refreshQrImage() {
@@ -614,10 +788,11 @@ export function renderWebUiHtml(): string {
     };
 
     async function loadAll() {
-      const [me, stock, products, groups, locations, units, shopping, keys, activity, users, backups, mcpSettings] = await Promise.all([
+      const [me, stock, products, barcodes, groups, locations, units, shopping, keys, activity, users, backups, mcpSettings] = await Promise.all([
         api('/api/auth/me'),
         api('/api/stock'),
         api('/api/objects/products'),
+        api('/api/objects/product_barcodes').catch(() => []),
         api('/api/objects/product_groups'),
         api('/api/objects/locations'),
         api('/api/objects/quantity_units'),
@@ -629,7 +804,7 @@ export function renderWebUiHtml(): string {
         api('/api/mcp/settings').catch(() => ({ read_enabled: true, write_enabled: false })),
       ]);
       currentUser = me;
-      state = { stock, products, groups, locations, units, shopping, keys, activity, users, backups, mcpSettings };
+      state = { stock, products, barcodes, groups, locations, units, shopping, keys, activity, users, backups, mcpSettings };
       populateDropdowns();
       renderAll();
     }
@@ -650,6 +825,35 @@ export function renderWebUiHtml(): string {
       const bg = document.getElementById('bulkGroupSelect');
       bg.innerHTML = '<option value="">(Ungrouped)</option>' +
         state.groups.map((g) => '<option value="' + g.id + '">' + escapeHtml(g.name) + '</option>').join('');
+
+      // Label creator dropdowns
+      const lep = document.getElementById('labelExistingProd');
+      if (lep) {
+        const prevP = lep.value;
+        lep.innerHTML = '<option value="">New / Unbarcoded Item</option>' +
+          [...state.products].sort((a, b) => a.name.localeCompare(b.name))
+            .map((p) => '<option value="' + p.id + '">' + escapeHtml(p.name) + '</option>').join('');
+        if ([...lep.options].some((o) => o.value === prevP)) lep.value = prevP;
+      }
+      const ll = document.getElementById('lblItemLocation');
+      if (ll) {
+        const prev = ll.value;
+        ll.innerHTML = state.locations.map((l) => '<option value="' + l.id + '">' + escapeHtml(l.name) + '</option>').join('');
+        if ([...ll.options].some((o) => o.value === prev)) ll.value = prev;
+      }
+      const lg = document.getElementById('lblItemGroup');
+      if (lg) {
+        const prev = lg.value;
+        lg.innerHTML = '<option value="">(Ungrouped)</option>' +
+          state.groups.map((g) => '<option value="' + g.id + '">' + escapeHtml(g.name) + '</option>').join('');
+        if ([...lg.options].some((o) => o.value === prev)) lg.value = prev;
+      }
+      const lu = document.getElementById('lblItemUnit');
+      if (lu) {
+        const prev = lu.value;
+        lu.innerHTML = state.units.map((u) => '<option value="' + u.id + '">' + escapeHtml(u.name) + '</option>').join('');
+        if ([...lu.options].some((o) => o.value === prev)) lu.value = prev;
+      }
     }
 
     const ACTION_VERBS = {
@@ -787,10 +991,10 @@ export function renderWebUiHtml(): string {
                       <td>
                         <div class="row" style="gap:4px;flex-wrap:nowrap;">
                           \${prodPhoto
-                            ? \`<img class="thumb-sm" src="\${photoUrl(prodPhoto)}" title="Product photo (click to view, replace, or remove)" onclick="openPhoto('\${prodPhoto}', '\${escapeAttr(p.name)} — Product', 'product', \${p.id})" />\`
+                            ? \`<img class="thumb-sm" loading="lazy" decoding="async" src="\${photoUrl(prodPhoto, true)}" title="Product photo (click to view, replace, or remove)" onclick="openPhoto('\${prodPhoto}', '\${escapeAttr(p.name)} — Product', 'product', \${p.id})" />\`
                             : \`<label class="thumb-btn" title="Upload product photo">Item<input type="file" accept="image/*" style="display:none;" onchange="uploadPhoto('product', \${p.id}, this.files[0])" /></label>\`}
                           \${shelfPhoto
-                            ? \`<img class="thumb-sm" src="\${photoUrl(shelfPhoto)}" title="Shelf photo (click to view, replace, or remove)" onclick="openPhoto('\${shelfPhoto}', '\${escapeAttr(p.name)} — Shelf', 'product-storage', \${p.id})" />\`
+                            ? \`<img class="thumb-sm" loading="lazy" decoding="async" src="\${photoUrl(shelfPhoto, true)}" title="Shelf photo (click to view, replace, or remove)" onclick="openPhoto('\${shelfPhoto}', '\${escapeAttr(p.name)} — Shelf', 'product-storage', \${p.id})" />\`
                             : \`<label class="thumb-btn" title="Upload shelf photo">Shelf<input type="file" accept="image/*" style="display:none;" onchange="uploadPhoto('product-storage', \${p.id}, this.files[0])" /></label>\`}
                         </div>
                       </td>
@@ -1014,7 +1218,7 @@ export function renderWebUiHtml(): string {
         <div style="flex:1;border:1px solid var(--border);border-radius:10px;padding:10px;background:var(--bg);display:flex;flex-direction:column;gap:8px;align-items:center;">
           <div style="font-size:12px;font-weight:700;color:var(--muted);">\${title}</div>
           \${file
-            ? \`<img src="\${photoUrl(file)}" style="width:68px;height:68px;object-fit:cover;border-radius:8px;border:1px solid var(--border);cursor:pointer;" onclick="openPhoto('\${file}', '\${escapeAttr(p.name)} — \${title}', '\${kind}', \${productId})" />\`
+            ? \`<img loading="lazy" decoding="async" src="\${photoUrl(file, true)}" style="width:68px;height:68px;object-fit:cover;border-radius:8px;border:1px solid var(--border);cursor:pointer;" onclick="openPhoto('\${file}', '\${escapeAttr(p.name)} — \${title}', '\${kind}', \${productId})" />\`
             : '<div class="muted" style="height:68px;display:flex;align-items:center;font-size:12px;">No photo</div>'}
           <div class="row" style="gap:6px;justify-content:center;">
             <label class="sm" style="display:inline-flex;align-items:center;cursor:pointer;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:4px 10px;font-size:12px;">
@@ -1110,10 +1314,11 @@ export function renderWebUiHtml(): string {
     window.quickAdd = async (id) => { await api('/api/stock/products/' + id + '/add', { method: 'POST', body: JSON.stringify({ amount: 1 }) }); await loadAll(); };
     window.uploadPhoto = async (kind, id, file) => {
       if (!file) return;
-      const buf = await file.arrayBuffer();
+      const prepared = await compressImageFile(file);
+      const buf = await prepared.blob.arrayBuffer();
       const res = await fetch('/api/photos/' + kind + '/' + id, {
         method: 'POST',
-        headers: { 'GROCY-API-KEY': apiKey, 'Content-Type': file.type || 'image/jpeg' },
+        headers: { 'GROCY-API-KEY': apiKey, 'Content-Type': prepared.type || 'image/jpeg' },
         body: buf,
       });
       const data = await res.json().catch(() => ({}));
@@ -1288,15 +1493,225 @@ export function renderWebUiHtml(): string {
       document.getElementById('loginView').classList.remove('hidden');
     };
 
+    function switchTab(tabName) {
+      document.querySelectorAll('#navTabs button[data-tab]').forEach((b) => {
+        b.classList.toggle('active', b.dataset.tab === tabName);
+      });
+      ['inventory', 'shopping', 'labels', 'locations', 'activity', 'users', 'import', 'keys'].forEach((t) => {
+        document.getElementById('tab-' + t).classList.toggle('hidden', t !== tabName);
+      });
+      if (tabName === 'labels') {
+        if (!document.getElementById('labelCodeInput').value.trim()) {
+          document.getElementById('labelCodeInput').value = generateLabelCode();
+        }
+        renderLabelPreview();
+      }
+    }
+
     document.querySelectorAll('#navTabs button[data-tab]').forEach((btn) => {
-      btn.onclick = () => {
-        document.querySelectorAll('#navTabs button[data-tab]').forEach((b) => b.classList.remove('active'));
-        btn.classList.add('active');
-        ['inventory', 'shopping', 'locations', 'activity', 'users', 'import', 'keys'].forEach((t) => {
-          document.getElementById('tab-' + t).classList.toggle('hidden', t !== btn.dataset.tab);
-        });
-      };
+      btn.onclick = () => switchTab(btn.dataset.tab);
     });
+
+    // ─── 1" x 2" Label Creator & Matching Item Creation ───
+    function generateLabelCode() {
+      const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+      const bytes = new Uint8Array(6);
+      crypto.getRandomValues(bytes);
+      let out = 'GG-';
+      for (let i = 0; i < bytes.length; i++) out += alphabet[bytes[i] % alphabet.length];
+      return out;
+    }
+
+    function getLabelSvgUrl(code, format) {
+      if (format === 'barcode') {
+        return '/api/barcode?text=' + encodeURIComponent(code) + '&api_key=' + encodeURIComponent(apiKey);
+      }
+      return '/api/qr?text=' + encodeURIComponent(code) + '&label=1&api_key=' + encodeURIComponent(apiKey);
+    }
+
+    function renderLabelPreview() {
+      const code = document.getElementById('labelCodeInput').value.trim() || 'GG-SAMPLE';
+      const format = document.getElementById('labelFormatSelect').value;
+      const title = document.getElementById('labelTitleInput').value.trim();
+      const sub = document.getElementById('labelSubInput').value.trim();
+      const orient = document.getElementById('labelOrientSelect').value;
+      const card = document.getElementById('labelPreviewCard');
+      const linkedCodeEl = document.getElementById('lblItemCode');
+      if (linkedCodeEl) linkedCodeEl.value = code;
+
+      card.className = orient === '1x2' ? 'label-card-1x2' : 'label-card-2x1';
+      const imgUrl = getLabelSvgUrl(code, format);
+
+      if (format === 'qr') {
+        if (orient === '1x2') {
+          card.innerHTML = \`
+            <img src="\${imgUrl}" alt="QR" style="width:124px;height:124px;display:block;flex-shrink:0;" />
+            <div style="text-align:center;margin-top:6px;width:100%;overflow:hidden;">
+              \${title ? \`<div style="font-size:13px;font-weight:700;line-height:1.2;word-break:break-word;">\${escapeHtml(title)}</div>\` : ''}
+              \${sub ? \`<div style="font-size:10px;color:#333;margin-top:2px;">\${escapeHtml(sub)}</div>\` : ''}
+              <div style="font-family:monospace;font-size:11px;font-weight:700;margin-top:4px;">\${escapeHtml(code)}</div>
+            </div>\`;
+        } else {
+          card.innerHTML = \`
+            <div style="display:flex;align-items:center;gap:10px;width:100%;height:100%;">
+              <img src="\${imgUrl}" alt="QR" style="width:126px;height:126px;display:block;flex-shrink:0;" />
+              <div style="flex:1;min-width:0;text-align:left;">
+                <div style="font-size:14px;font-weight:700;line-height:1.2;word-break:break-word;">\${escapeHtml(title || 'GrocyGo Item')}</div>
+                \${sub ? \`<div style="font-size:11px;color:#333;margin-top:3px;word-break:break-word;">\${escapeHtml(sub)}</div>\` : ''}
+                <div style="font-family:monospace;font-size:11px;font-weight:700;margin-top:6px;">\${escapeHtml(code)}</div>
+              </div>
+            </div>\`;
+        }
+      } else {
+        card.innerHTML = \`
+          <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;width:100%;height:100%;gap:2px;">
+            \${title ? \`<div style="font-size:13px;font-weight:700;line-height:1.15;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">\${escapeHtml(title)}</div>\` : ''}
+            <img src="\${imgUrl}" alt="Barcode" style="width:100%;max-height:\${orient === '1x2' ? '120px' : '96px'};object-fit:contain;display:block;" />
+            \${sub ? \`<div style="font-size:10px;color:#333;">\${escapeHtml(sub)}</div>\` : ''}
+          </div>\`;
+      }
+    }
+
+    document.getElementById('genLabelCodeBtn').onclick = () => {
+      document.getElementById('labelExistingProd').value = '';
+      document.getElementById('labelCodeInput').value = generateLabelCode();
+      document.getElementById('labelItemStatus').className = 'hidden';
+      renderLabelPreview();
+    };
+    ['labelCodeInput', 'labelFormatSelect', 'labelTitleInput', 'labelSubInput', 'labelOrientSelect'].forEach((id) => {
+      const el = document.getElementById(id);
+      el.oninput = () => {
+        if (id === 'labelTitleInput') {
+          document.getElementById('lblItemName').value = el.value;
+        }
+        renderLabelPreview();
+      };
+      el.onchange = renderLabelPreview;
+    });
+
+    document.getElementById('labelExistingProd').onchange = () => {
+      const pid = Number(document.getElementById('labelExistingProd').value);
+      if (!pid) {
+        document.getElementById('labelCodeInput').value = generateLabelCode();
+        document.getElementById('labelTitleInput').value = '';
+        document.getElementById('lblItemName').value = '';
+        renderLabelPreview();
+        return;
+      }
+      const prod = state.products.find((p) => p.id === pid);
+      const existingBc = state.barcodes.find((b) => b.product_id === pid);
+      if (prod) {
+        document.getElementById('labelTitleInput').value = prod.name;
+        document.getElementById('lblItemName').value = prod.name;
+        document.getElementById('labelCodeInput').value = existingBc ? existingBc.barcode : generateLabelCode();
+      }
+      renderLabelPreview();
+    };
+
+    document.getElementById('editPrintLabelBtn').onclick = () => {
+      const pid = editingProductId;
+      document.getElementById('editModal').classList.remove('open');
+      switchTab('labels');
+      if (pid) {
+        document.getElementById('labelExistingProd').value = String(pid);
+        document.getElementById('labelExistingProd').onchange();
+      }
+    };
+
+    document.getElementById('printLabelBtn').onclick = async () => {
+      const code = document.getElementById('labelCodeInput').value.trim();
+      if (!code) { alert('Enter or generate a label code first.'); return; }
+      const format = document.getElementById('labelFormatSelect').value;
+      const title = document.getElementById('labelTitleInput').value.trim();
+      const sub = document.getElementById('labelSubInput').value.trim();
+      const orient = document.getElementById('labelOrientSelect').value;
+      const copies = Math.min(20, Math.max(1, Number(document.getElementById('labelCopiesInput').value) || 1));
+
+      const svgRes = await fetch(getLabelSvgUrl(code, format));
+      if (!svgRes.ok) { alert('Could not render label graphic.'); return; }
+      const svgMarkup = await svgRes.text();
+
+      const pageW = orient === '1x2' ? '1in' : '2in';
+      const pageH = orient === '1x2' ? '2in' : '1in';
+
+      const singleLabelHtml = format === 'qr'
+        ? (orient === '1x2'
+          ? \`<div class="lbl portrait"><div class="qr-box">\${svgMarkup}</div><div class="meta">\${title ? '<div class="t">' + escapeHtml(title) + '</div>' : ''}\${sub ? '<div class="s">' + escapeHtml(sub) + '</div>' : ''}<div class="c">\${escapeHtml(code)}</div></div></div>\`
+          : \`<div class="lbl landscape"><div class="qr-box">\${svgMarkup}</div><div class="meta"><div class="t">\${escapeHtml(title || 'GrocyGo')}</div>\${sub ? '<div class="s">' + escapeHtml(sub) + '</div>' : ''}<div class="c">\${escapeHtml(code)}</div></div></div>\`)
+        : \`<div class="lbl bar">\${title ? '<div class="t">' + escapeHtml(title) + '</div>' : ''}<div class="bar-box">\${svgMarkup}</div>\${sub ? '<div class="s">' + escapeHtml(sub) + '</div>' : ''}</div>\`;
+
+      const pages = Array.from({ length: copies }, () => singleLabelHtml).join('');
+      const win = window.open('', '_blank', 'width=440,height=320');
+      if (!win) { alert('Allow popups for this site to open the 1"x2" label print sheet.'); return; }
+      win.document.write(\`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Label \${escapeHtml(code)}</title><style>
+        @page { size: \${pageW} \${pageH}; margin: 0; }
+        * { box-sizing: border-box; }
+        html, body { margin: 0; padding: 0; background: #fff; color: #000; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+        .lbl { width: \${pageW}; height: \${pageH}; padding: 0.06in 0.08in; overflow: hidden; page-break-after: always; break-after: page; display: flex; align-items: center; justify-content: center; }
+        .lbl:last-child { page-break-after: auto; break-after: auto; }
+        .lbl.landscape { flex-direction: row; gap: 0.08in; }
+        .lbl.landscape .qr-box { width: 0.84in; height: 0.84in; flex-shrink: 0; }
+        .lbl.landscape .meta { flex: 1; min-width: 0; text-align: left; }
+        .lbl.portrait { flex-direction: column; gap: 0.05in; text-align: center; }
+        .lbl.portrait .qr-box { width: 0.84in; height: 0.84in; flex-shrink: 0; }
+        .lbl.bar { flex-direction: column; gap: 0.02in; text-align: center; }
+        .lbl.bar .bar-box { width: 100%; height: 0.62in; }
+        .qr-box svg, .bar-box svg { width: 100%; height: 100%; display: block; }
+        .t { font-size: 9pt; font-weight: 700; line-height: 1.15; word-break: break-word; }
+        .s { font-size: 7pt; color: #222; margin-top: 2px; }
+        .c { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 7.5pt; font-weight: 700; margin-top: 3px; }
+      </style></head><body>\${pages}<script>window.onload = function(){ setTimeout(function(){ window.print(); }, 150); };<\\/script></body></html>\`);
+      win.document.close();
+    };
+
+    document.getElementById('createLabeledItemBtn').onclick = async () => {
+      const st = document.getElementById('labelItemStatus');
+      st.className = 'hidden';
+      const name = document.getElementById('lblItemName').value.trim();
+      const code = document.getElementById('labelCodeInput').value.trim();
+      const location_id = Number(document.getElementById('lblItemLocation').value);
+      const groupVal = document.getElementById('lblItemGroup').value;
+      const qu_id = Number(document.getElementById('lblItemUnit').value);
+      const qty = Number(document.getElementById('lblItemQty').value || 0);
+      const expiry = document.getElementById('lblItemExpiry').value.trim();
+
+      if (!name) { st.className = 'notice err'; st.textContent = 'Enter an item name.'; return; }
+      if (!code) { st.className = 'notice err'; st.textContent = 'Generate or enter a label code first.'; return; }
+
+      try {
+        const created = await api('/api/objects/products', {
+          method: 'POST',
+          body: JSON.stringify({
+            name,
+            location_id,
+            product_group_id: groupVal ? Number(groupVal) : null,
+            qu_id_purchase: qu_id,
+            qu_id_stock: qu_id,
+          }),
+        });
+        const newProdId = created.created_object_id;
+        await api('/api/objects/product_barcodes', {
+          method: 'POST',
+          body: JSON.stringify({ product_id: newProdId, barcode: code }),
+        });
+        if (qty > 0) {
+          await api('/api/stock/products/' + newProdId + '/add', {
+            method: 'POST',
+            body: JSON.stringify({
+              amount: qty,
+              location_id,
+              ...(expiry ? { best_before_date: expiry } : {}),
+            }),
+          });
+        }
+        st.className = 'notice';
+        st.textContent = 'Created "' + name + '" linked to ' + code + ' — ready to scan!';
+        await loadAll();
+      } catch (e) {
+        st.className = 'notice err';
+        st.textContent = e.message;
+      }
+    };
 
     document.getElementById('refreshBtn').onclick = loadAll;
     document.getElementById('refreshActivityBtn').onclick = loadAll;

@@ -4,6 +4,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import sharp from 'sharp';
 import { ensureDailyBackup, listDatabaseBackups, pruneOldBackups } from './backups';
 import { initDatabase } from './db';
 import { createRequestHandler } from './grocyApi';
@@ -608,7 +609,54 @@ async function runTests() {
     assert.ok(photoRemoveActivity.some((e: any) => e.transaction_type === 'photo_product_remove'));
     assert.ok(photoRemoveActivity.some((e: any) => e.transaction_type === 'photo_shelf_remove'));
 
-    console.log('ALL SERVER v1.5.1 TESTS PASSED!');
+    // 19. Code 128B Barcode SVG + Real Image Downsizing (WebP) + Lazy Thumbnails & ETag 304
+    const bcRes = await fetch(`${base}/api/barcode?text=GG-A7K3M9`, { headers });
+    assert.equal(bcRes.status, 200);
+    assert.ok((bcRes.headers.get('content-type') || '').includes('image/svg+xml'));
+    const bcSvg = await bcRes.text();
+    assert.ok(bcSvg.includes('<svg') && bcSvg.includes('<rect') && bcSvg.includes('GG-A7K3M9'));
+
+    // Upload an oversized 2000x1500 PNG -> should downsize to <=1280px WebP + create <=240px thumb
+    const bigPng = await sharp({
+      create: { width: 2000, height: 1500, channels: 3, background: { r: 61, g: 100, b: 74 } },
+    })
+      .png()
+      .toBuffer();
+
+    const optUpload = await fetch(`${base}/api/photos/product/${prodId}`, {
+      method: 'POST',
+      headers: { 'GROCY-API-KEY': 'test_secret_key_123', 'Content-Type': 'image/png' },
+      body: bigPng,
+    }).then((r) => r.json());
+    assert.ok(optUpload.file_name.endsWith('.webp'));
+
+    const fullImgRes = await fetch(`${base}/api/photos/${optUpload.file_name}`, { headers });
+    assert.equal(fullImgRes.status, 200);
+    const fullMeta = await sharp(Buffer.from(await fullImgRes.arrayBuffer())).metadata();
+    assert.ok((fullMeta.width || 0) <= 1280 && (fullMeta.height || 0) <= 1280);
+
+    const thumbRes = await fetch(`${base}/api/photos/${optUpload.file_name}?thumb=1`, { headers });
+    assert.equal(thumbRes.status, 200);
+    const thumbEtag = thumbRes.headers.get('etag');
+    assert.ok(thumbEtag);
+    const thumbMeta = await sharp(Buffer.from(await thumbRes.arrayBuffer())).metadata();
+    assert.equal(thumbMeta.width, 240);
+    assert.equal(thumbMeta.height, 240);
+
+    const notModRes = await fetch(`${base}/api/photos/${optUpload.file_name}?thumb=1`, {
+      headers: { ...headers, 'If-None-Match': thumbEtag! },
+    });
+    assert.equal(notModRes.status, 304);
+
+    // Deleting photo cleans up both full file and cached thumbnail
+    await fetch(`${base}/api/photos/product/${prodId}`, { method: 'DELETE', headers });
+    assert.equal(fs.existsSync(path.join(ctx.photosDir, optUpload.file_name)), false);
+    assert.equal(
+      fs.existsSync(path.join(ctx.photosDir, 'thumbs', `${optUpload.file_name}.webp`)),
+      false
+    );
+
+    console.log('ALL SERVER v1.6.0 TESTS PASSED!');
     console.log('\nSample compact MCP inventory_summary output:\n' + summaryText);
     console.log('\nSample compact MCP search_inventory output:\n' + searchText);
   } finally {

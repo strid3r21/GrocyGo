@@ -9,12 +9,15 @@ import {
   listDatabaseBackups,
   sanitizeBackupName,
 } from './backups';
+import { renderCode128Svg } from './barcode';
 import { DbContext } from './db';
 import { importFromGrocyApi, importFromGrocySqliteBuffer } from './grocyImport';
 import { InventoryService } from './inventoryService';
 import { handleMcpJsonRpc } from './mcp';
 import {
+  deleteThumbnail,
   getMimeForFile,
+  getOrCreateThumbnailPath,
   MAX_PHOTO_BYTES,
   sanitizeFileName,
   savePhotoBase64,
@@ -137,7 +140,7 @@ function extractApiKey(req: http.IncomingMessage, url: URL): string | null {
 async function extractUploadedPhoto(
   req: http.IncomingMessage,
   photosDir: string
-): Promise<{ fileName: string; size: number }> {
+): Promise<{ fileName: string; size: number; optimized: boolean }> {
   const contentType = String(req.headers['content-type'] || '').toLowerCase();
 
   if (contentType.includes('application/json')) {
@@ -145,11 +148,11 @@ async function extractUploadedPhoto(
     if (!json.data_base64 || typeof json.data_base64 !== 'string') {
       throw new Error('Missing data_base64 field');
     }
-    return savePhotoBase64(photosDir, json.data_base64, json.mime_type);
+    return await savePhotoBase64(photosDir, json.data_base64, json.mime_type);
   }
 
   const buf = await readBodyBuffer(req);
-  return savePhotoBuffer(photosDir, buf, contentType || 'image/jpeg');
+  return await savePhotoBuffer(photosDir, buf, contentType || 'image/jpeg');
 }
 
 export function createRequestHandler(ctx: DbContext, service: InventoryService) {
@@ -192,7 +195,7 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
       }
 
       if (method === 'GET' && pathname === '/api/health') {
-        sendJson(res, 200, { ok: true, service: 'grocygo-server', version: '1.5.1' });
+        sendJson(res, 200, { ok: true, service: 'grocygo-server', version: '1.6.0' });
         return;
       }
 
@@ -368,7 +371,7 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
         const mcpPerms = service.getMcpSettings();
         sendJson(res, 200, {
           grocy_version: {
-            Version: 'GrocyGo-Server 1.5.1',
+            Version: 'GrocyGo-Server 1.6.0',
             ReleaseDate: '2026-11-25',
           },
           php_version: `Node ${process.version}`,
@@ -379,6 +382,8 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
             food_inventory: true,
             shopping_list: true,
             storage_photos: true,
+            photo_thumbnails: true,
+            labels: true,
             grocy_import: true,
             qr_codes: true,
             multi_user: true,
@@ -400,10 +405,27 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
         }
         const svg = await QRCode.toString(text, {
           type: 'svg',
-          margin: 2,
+          margin: url.searchParams.get('label') === '1' ? 1 : 2,
           errorCorrectionLevel: 'M',
-          color: { dark: '#1E2420', light: '#FCFBF8' },
+          color: {
+            dark: url.searchParams.get('label') === '1' ? '#000000' : '#1E2420',
+            light: url.searchParams.get('label') === '1' ? '#FFFFFF' : '#FCFBF8',
+          },
         });
+        res.writeHead(200, {
+          'Content-Type': 'image/svg+xml; charset=utf-8',
+          'Cache-Control': 'no-store',
+          'Access-Control-Allow-Origin': '*',
+        });
+        res.end(svg);
+        return;
+      }
+
+      // ─── Code 128B Barcode SVG Generator (for 1"x2" Labels) ───
+      if (method === 'GET' && pathname === '/api/barcode') {
+        const text = url.searchParams.get('text') || '';
+        const showText = url.searchParams.get('show_text') !== '0';
+        const svg = renderCode128Svg(text, { showText });
         res.writeHead(200, {
           'Content-Type': 'image/svg+xml; charset=utf-8',
           'Cache-Control': 'no-store',
@@ -590,14 +612,29 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
             sendError(res, 404, 'Photo not found');
             return;
           }
-          const stat = fs.statSync(fullPath);
+          const wantsThumb = url.searchParams.get('thumb') === '1';
+          const servePath = wantsThumb
+            ? (await getOrCreateThumbnailPath(ctx.photosDir, safe)) || fullPath
+            : fullPath;
+          const stat = fs.statSync(servePath);
+          const etag = `"${stat.size}-${Math.floor(stat.mtimeMs)}"`;
+          if (req.headers['if-none-match'] === etag) {
+            res.writeHead(304, {
+              ETag: etag,
+              'Cache-Control': 'public, max-age=31536000, immutable',
+              'Access-Control-Allow-Origin': '*',
+            });
+            res.end();
+            return;
+          }
           res.writeHead(200, {
-            'Content-Type': getMimeForFile(safe),
+            'Content-Type': getMimeForFile(servePath),
             'Content-Length': stat.size,
-            'Cache-Control': 'public, max-age=86400',
+            ETag: etag,
+            'Cache-Control': 'public, max-age=31536000, immutable',
             'Access-Control-Allow-Origin': '*',
           });
-          fs.createReadStream(fullPath).pipe(res);
+          fs.createReadStream(servePath).pipe(res);
           return;
         }
         if (method === 'DELETE') {
@@ -613,6 +650,7 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
             )
             .run(safe);
           if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
+          deleteThumbnail(ctx.photosDir, safe);
           sendJson(res, 200, { deleted: safe });
           return;
         }

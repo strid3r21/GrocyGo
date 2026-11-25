@@ -1,6 +1,6 @@
 {
   "name": "grocygo-server",
-  "version": "1.5.1",
+  "version": "1.6.0",
   "description": "Lightweight self-hosted food inventory & shopping list server with storage photos and built-in MCP server",
   "main": "dist/index.js",
   "scripts": {
@@ -10,7 +10,8 @@
     "test": "tsc && node dist/test.js"
   },
   "dependencies": {
-    "qrcode": "^1.5.4"
+    "qrcode": "^1.5.4",
+    "sharp": "^0.35.5"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

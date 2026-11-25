@@ -421,7 +421,7 @@ export async function importDataset(
       const fetched = await options.photoFetcher(String(p.picture_file_name));
       if (fetched) {
         try {
-          const saved = savePhotoBuffer(ctx.photosDir, fetched.buffer, fetched.mimeType);
+          const saved = await savePhotoBuffer(ctx.photosDir, fetched.buffer, fetched.mimeType);
           db.prepare('UPDATE products SET picture_file_name = ? WHERE id = ?').run(
             saved.fileName,
             newProdId
