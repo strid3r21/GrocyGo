@@ -698,6 +698,8 @@ function executeTool(
       shopping_done: 'checked off shopping list',
       photo_product: 'updated product photo for',
       photo_shelf: 'updated shelf photo for',
+      photo_product_remove: 'removed product photo for',
+      photo_shelf_remove: 'removed shelf photo for',
       product_create: 'created item',
       product_edit: 'edited',
       bulk_group: 'grouped',

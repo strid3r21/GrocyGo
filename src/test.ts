@@ -581,7 +581,34 @@ async function runTests() {
     const readOnlyAgain = await mcpCall(28, 'tools/list');
     assert.equal(readOnlyAgain.result.tools.length, 7);
 
-    console.log('ALL SERVER v1.5.0 TESTS PASSED!');
+    // 18. Remove product & shelf photos via UI endpoints (clears DB, deletes files, logs activity)
+    const delProdPhoto = await fetch(`${base}/api/photos/product/${prodId}`, {
+      method: 'DELETE',
+      headers,
+    }).then((r) => r.json());
+    assert.equal(delProdPhoto.removed, prodPhotoRes.file_name);
+
+    const delShelfPhoto = await fetch(`${base}/api/photos/product-storage/${prodId}`, {
+      method: 'DELETE',
+      headers,
+    }).then((r) => r.json());
+    assert.ok(delShelfPhoto.removed.includes(replaceRes.file_name));
+
+    const detailsAfterRemove = await fetch(`${base}/api/stock/products/${prodId}`, {
+      headers,
+    }).then((r) => r.json());
+    assert.equal(detailsAfterRemove.product_photo_file_name, null);
+    assert.equal(detailsAfterRemove.storage_photo_file_name, null);
+    assert.equal(fs.existsSync(path.join(ctx.photosDir, prodPhotoRes.file_name)), false);
+    assert.equal(fs.existsSync(path.join(ctx.photosDir, replaceRes.file_name)), false);
+
+    const photoRemoveActivity = await fetch(`${base}/api/activity?limit=15`, { headers }).then((r) =>
+      r.json()
+    );
+    assert.ok(photoRemoveActivity.some((e: any) => e.transaction_type === 'photo_product_remove'));
+    assert.ok(photoRemoveActivity.some((e: any) => e.transaction_type === 'photo_shelf_remove'));
+
+    console.log('ALL SERVER v1.5.1 TESTS PASSED!');
     console.log('\nSample compact MCP inventory_summary output:\n' + summaryText);
     console.log('\nSample compact MCP search_inventory output:\n' + searchText);
   } finally {

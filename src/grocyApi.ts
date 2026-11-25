@@ -192,7 +192,7 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
       }
 
       if (method === 'GET' && pathname === '/api/health') {
-        sendJson(res, 200, { ok: true, service: 'grocygo-server', version: '1.5.0' });
+        sendJson(res, 200, { ok: true, service: 'grocygo-server', version: '1.5.1' });
         return;
       }
 
@@ -368,7 +368,7 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
         const mcpPerms = service.getMcpSettings();
         sendJson(res, 200, {
           grocy_version: {
-            Version: 'GrocyGo-Server 1.5.0',
+            Version: 'GrocyGo-Server 1.5.1',
             ReleaseDate: '2026-11-25',
           },
           php_version: `Node ${process.version}`,
@@ -514,29 +514,45 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
       }
 
       const productPhotoMatch = pathname.match(/^\/api\/photos\/product\/(\d+)$/);
-      if (method === 'POST' && productPhotoMatch) {
+      if (productPhotoMatch) {
         const productId = Number(productPhotoMatch[1]);
-        const saved = await extractUploadedPhoto(req, ctx.photosDir);
-        const result = service.attachPhotoToProduct(productId, saved.fileName, currentUser.id);
-        sendJson(res, 200, {
-          ...result,
-          url: `/api/photos/${saved.fileName}`,
-          size: saved.size,
-        });
-        return;
+        if (method === 'POST') {
+          const saved = await extractUploadedPhoto(req, ctx.photosDir);
+          const result = service.attachPhotoToProduct(productId, saved.fileName, currentUser.id);
+          sendJson(res, 200, {
+            ...result,
+            url: `/api/photos/${saved.fileName}`,
+            size: saved.size,
+          });
+          return;
+        }
+        if (method === 'DELETE') {
+          sendJson(res, 200, service.removePhotoFromProduct(productId, currentUser.id));
+          return;
+        }
       }
 
       const productStoragePhotoMatch = pathname.match(/^\/api\/photos\/product-storage\/(\d+)$/);
-      if (method === 'POST' && productStoragePhotoMatch) {
+      if (productStoragePhotoMatch) {
         const productId = Number(productStoragePhotoMatch[1]);
-        const saved = await extractUploadedPhoto(req, ctx.photosDir);
-        const result = service.attachStoragePhotoToProduct(productId, saved.fileName, currentUser.id);
-        sendJson(res, 200, {
-          ...result,
-          url: `/api/photos/${saved.fileName}`,
-          size: saved.size,
-        });
-        return;
+        if (method === 'POST') {
+          const saved = await extractUploadedPhoto(req, ctx.photosDir);
+          const result = service.attachStoragePhotoToProduct(
+            productId,
+            saved.fileName,
+            currentUser.id
+          );
+          sendJson(res, 200, {
+            ...result,
+            url: `/api/photos/${saved.fileName}`,
+            size: saved.size,
+          });
+          return;
+        }
+        if (method === 'DELETE') {
+          sendJson(res, 200, service.removeStoragePhotoFromProduct(productId, currentUser.id));
+          return;
+        }
       }
 
       // ─── Bulk Group Assign & Full Inventory Item Edit ─────────

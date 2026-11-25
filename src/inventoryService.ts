@@ -1015,6 +1015,74 @@ export class InventoryService {
     return { product_id: productId, file_name: fileName };
   }
 
+  removePhotoFromProduct(productId: number, userId?: number | null) {
+    const existing = this.db
+      .prepare('SELECT id, name, location_id, picture_file_name FROM products WHERE id = ?')
+      .get(productId) as
+      | { id: number; name: string; location_id: number; picture_file_name: string | null }
+      | undefined;
+    if (!existing) throw new Error(`Product ${productId} not found`);
+
+    const prev = existing.picture_file_name;
+    this.db.prepare('UPDATE products SET picture_file_name = NULL WHERE id = ?').run(productId);
+
+    if (prev) {
+      this.cleanupPhotoIfUnused(prev);
+      this.logActivity({
+        productId,
+        itemLabel: existing.name,
+        amount: 0,
+        transactionType: 'photo_product_remove',
+        locationId: existing.location_id,
+        userId,
+      });
+    }
+
+    return { product_id: productId, removed: prev };
+  }
+
+  removeStoragePhotoFromProduct(productId: number, userId?: number | null) {
+    const existing = this.db
+      .prepare('SELECT id, name, location_id, storage_photo_file_name FROM products WHERE id = ?')
+      .get(productId) as
+      | { id: number; name: string; location_id: number; storage_photo_file_name: string | null }
+      | undefined;
+    if (!existing) throw new Error(`Product ${productId} not found`);
+
+    const stockPhotos = (
+      this.db
+        .prepare(
+          "SELECT DISTINCT photo_file_name FROM stock WHERE product_id = ? AND photo_file_name IS NOT NULL AND photo_file_name != ''"
+        )
+        .all(productId) as Array<{ photo_file_name: string }>
+    ).map((r) => r.photo_file_name);
+
+    const filesToCheck = new Set<string>(stockPhotos);
+    if (existing.storage_photo_file_name) filesToCheck.add(existing.storage_photo_file_name);
+
+    this.db
+      .prepare('UPDATE products SET storage_photo_file_name = NULL WHERE id = ?')
+      .run(productId);
+    this.db.prepare('UPDATE stock SET photo_file_name = NULL WHERE product_id = ?').run(productId);
+
+    for (const f of filesToCheck) {
+      this.cleanupPhotoIfUnused(f);
+    }
+
+    if (filesToCheck.size > 0) {
+      this.logActivity({
+        productId,
+        itemLabel: existing.name,
+        amount: 0,
+        transactionType: 'photo_shelf_remove',
+        locationId: existing.location_id,
+        userId,
+      });
+    }
+
+    return { product_id: productId, removed: Array.from(filesToCheck) };
+  }
+
   getMcpSettings(): { read_enabled: boolean; write_enabled: boolean } {
     const rows = this.db
       .prepare("SELECT key, value FROM server_settings WHERE key IN ('mcp_read_enabled', 'mcp_write_enabled')")

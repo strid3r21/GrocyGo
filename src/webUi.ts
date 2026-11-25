@@ -521,16 +521,28 @@ export function renderWebUiHtml(): string {
         <label for="editDesc">Description / Notes</label>
         <input id="editDesc" placeholder="Optional notes" />
       </div>
+      <div class="field">
+        <label>Photos</label>
+        <div id="editPhotosRow" class="row" style="gap:10px;align-items:stretch;"></div>
+      </div>
       <div id="editErr" class="hidden"></div>
       <button id="saveEditBtn" class="primary" style="width:100%;margin-top:6px;">Save Changes</button>
     </div>
   </div>
 
   <!-- Photo Lightbox -->
-  <div id="lightbox" class="modal-backdrop lightbox" onclick="this.classList.remove('open')">
-    <div style="text-align:center;">
+  <div id="lightbox" class="modal-backdrop lightbox" onclick="if(event.target===this)this.classList.remove('open')">
+    <div style="text-align:center;" onclick="event.stopPropagation()">
       <img id="lightboxImg" alt="Item photo" />
       <div id="lightboxCap" class="lightbox-cap"></div>
+      <div class="row" style="justify-content:center;margin-top:12px;">
+        <label class="sm" style="display:inline-flex;align-items:center;cursor:pointer;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:10px;padding:6px 14px;min-height:36px;font-weight:500;">
+          Replace Photo
+          <input id="lightboxReplaceInput" type="file" accept="image/*" style="display:none;" />
+        </label>
+        <button id="lightboxRemoveBtn" class="danger sm" type="button">Remove Photo</button>
+        <button class="sm" type="button" onclick="document.getElementById('lightbox').classList.remove('open')">Close</button>
+      </div>
     </div>
   </div>
 
@@ -560,6 +572,7 @@ export function renderWebUiHtml(): string {
     let selectedIds = new Set();
     let editingProductId = null;
     let activeQrKey = '';
+    let activeLightbox = null;
 
     async function api(path, opts = {}) {
       const res = await fetch(path, {
@@ -649,6 +662,8 @@ export function renderWebUiHtml(): string {
       shopping_done: 'checked off:',
       photo_product: 'updated product photo for',
       photo_shelf: 'updated shelf photo for',
+      photo_product_remove: 'removed product photo for',
+      photo_shelf_remove: 'removed shelf photo for',
       product_create: 'created item',
       product_edit: 'edited',
       bulk_group: 'grouped',
@@ -772,10 +787,10 @@ export function renderWebUiHtml(): string {
                       <td>
                         <div class="row" style="gap:4px;flex-wrap:nowrap;">
                           \${prodPhoto
-                            ? \`<img class="thumb-sm" src="\${photoUrl(prodPhoto)}" title="Product photo" onclick="openPhoto('\${prodPhoto}', '\${escapeAttr(p.name)} — Product')" />\`
+                            ? \`<img class="thumb-sm" src="\${photoUrl(prodPhoto)}" title="Product photo (click to view, replace, or remove)" onclick="openPhoto('\${prodPhoto}', '\${escapeAttr(p.name)} — Product', 'product', \${p.id})" />\`
                             : \`<label class="thumb-btn" title="Upload product photo">Item<input type="file" accept="image/*" style="display:none;" onchange="uploadPhoto('product', \${p.id}, this.files[0])" /></label>\`}
                           \${shelfPhoto
-                            ? \`<img class="thumb-sm" src="\${photoUrl(shelfPhoto)}" title="Shelf photo" onclick="openPhoto('\${shelfPhoto}', '\${escapeAttr(p.name)} — Shelf')" />\`
+                            ? \`<img class="thumb-sm" src="\${photoUrl(shelfPhoto)}" title="Shelf photo (click to view, replace, or remove)" onclick="openPhoto('\${shelfPhoto}', '\${escapeAttr(p.name)} — Shelf', 'product-storage', \${p.id})" />\`
                             : \`<label class="thumb-btn" title="Upload shelf photo">Shelf<input type="file" accept="image/*" style="display:none;" onchange="uploadPhoto('product-storage', \${p.id}, this.files[0])" /></label>\`}
                         </div>
                       </td>
@@ -840,7 +855,7 @@ export function renderWebUiHtml(): string {
               const verb = ACTION_VERBS[e.transaction_type] || e.transaction_type;
               const qty = Math.abs(Number(e.amount || 0));
               const unit = qty === 1 ? e.qu_name : (e.qu_name_plural || e.qu_name);
-              const showQty = qty > 0 && !['bulk_group', 'photo_product', 'photo_shelf', 'product_edit', 'product_create'].includes(e.transaction_type);
+              const showQty = qty > 0 && !['bulk_group', 'photo_product', 'photo_shelf', 'photo_product_remove', 'photo_shelf_remove', 'product_edit', 'product_create'].includes(e.transaction_type);
               const qtyPart = showQty ? qty + (unit ? ' ' + unit : '') + ' ' : '';
               return \`
                 <div class="activity-row">
@@ -988,6 +1003,30 @@ export function renderWebUiHtml(): string {
       await loadAll();
     };
 
+    function renderEditModalPhotos(productId) {
+      const p = state.products.find((x) => x.id === productId);
+      const s = state.stock.find((x) => x.product_id === productId);
+      const row = document.getElementById('editPhotosRow');
+      if (!p || !row) return;
+      const prodPhoto = (s && s.product_photo_file_name) || p.picture_file_name;
+      const shelfPhoto = (s && s.storage_photo_file_name) || p.storage_photo_file_name;
+      const slot = (title, kind, file) => \`
+        <div style="flex:1;border:1px solid var(--border);border-radius:10px;padding:10px;background:var(--bg);display:flex;flex-direction:column;gap:8px;align-items:center;">
+          <div style="font-size:12px;font-weight:700;color:var(--muted);">\${title}</div>
+          \${file
+            ? \`<img src="\${photoUrl(file)}" style="width:68px;height:68px;object-fit:cover;border-radius:8px;border:1px solid var(--border);cursor:pointer;" onclick="openPhoto('\${file}', '\${escapeAttr(p.name)} — \${title}', '\${kind}', \${productId})" />\`
+            : '<div class="muted" style="height:68px;display:flex;align-items:center;font-size:12px;">No photo</div>'}
+          <div class="row" style="gap:6px;justify-content:center;">
+            <label class="sm" style="display:inline-flex;align-items:center;cursor:pointer;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:4px 10px;font-size:12px;">
+              \${file ? 'Replace' : 'Upload'}
+              <input type="file" accept="image/*" style="display:none;" onchange="uploadPhoto('\${kind}', \${productId}, this.files[0])" />
+            </label>
+            \${file ? \`<button class="danger sm" type="button" style="min-height:28px;padding:4px 10px;font-size:12px;" onclick="removePhoto('\${kind}', \${productId})">Remove</button>\` : ''}
+          </div>
+        </div>\`;
+      row.innerHTML = slot('Item Photo', 'product', prodPhoto) + slot('Shelf Photo', 'product-storage', shelfPhoto);
+    }
+
     // Edit Item Modal
     window.openEditModal = (productId) => {
       const p = state.products.find((x) => x.id === productId);
@@ -1010,6 +1049,7 @@ export function renderWebUiHtml(): string {
       el.innerHTML = state.locations.map((l) => '<option value="' + l.id + '">' + escapeHtml(l.name) + '</option>').join('');
       el.value = String(p.location_id);
 
+      renderEditModalPhotos(productId);
       document.getElementById('editErr').className = 'hidden';
       document.getElementById('editModal').classList.add('open');
     };
@@ -1058,9 +1098,12 @@ export function renderWebUiHtml(): string {
       renderAll();
     };
 
-    window.openPhoto = (file, caption) => {
+    window.openPhoto = (file, caption, kind, productId) => {
+      activeLightbox = kind && productId ? { file, caption, kind, productId } : null;
       document.getElementById('lightboxImg').src = photoUrl(file);
       document.getElementById('lightboxCap').textContent = caption || '';
+      document.getElementById('lightboxRemoveBtn').classList.toggle('hidden', !activeLightbox);
+      document.getElementById('lightboxReplaceInput').value = '';
       document.getElementById('lightbox').classList.add('open');
     };
     window.quickConsume = async (id) => { await api('/api/stock/products/' + id + '/consume', { method: 'POST', body: JSON.stringify({ amount: 1 }) }); await loadAll(); };
@@ -1068,12 +1111,44 @@ export function renderWebUiHtml(): string {
     window.uploadPhoto = async (kind, id, file) => {
       if (!file) return;
       const buf = await file.arrayBuffer();
-      await fetch('/api/photos/' + kind + '/' + id, {
+      const res = await fetch('/api/photos/' + kind + '/' + id, {
         method: 'POST',
         headers: { 'GROCY-API-KEY': apiKey, 'Content-Type': file.type || 'image/jpeg' },
         body: buf,
       });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { alert(data.error_message || 'Photo upload failed'); return; }
       await loadAll();
+      if (editingProductId === id && document.getElementById('editModal').classList.contains('open')) {
+        renderEditModalPhotos(id);
+      }
+      if (activeLightbox && activeLightbox.productId === id && activeLightbox.kind === kind && data.file_name) {
+        activeLightbox.file = data.file_name;
+        document.getElementById('lightboxImg').src = photoUrl(data.file_name);
+      }
+    };
+    window.removePhoto = async (kind, id) => {
+      const label = kind === 'product' ? 'item photo' : 'shelf photo';
+      if (!confirm('Remove this ' + label + '?')) return;
+      try {
+        await api('/api/photos/' + kind + '/' + id, { method: 'DELETE' });
+        if (activeLightbox && activeLightbox.productId === id && activeLightbox.kind === kind) {
+          document.getElementById('lightbox').classList.remove('open');
+          activeLightbox = null;
+        }
+        await loadAll();
+        if (editingProductId === id && document.getElementById('editModal').classList.contains('open')) {
+          renderEditModalPhotos(id);
+        }
+      } catch (e) { alert(e.message); }
+    };
+    document.getElementById('lightboxRemoveBtn').onclick = () => {
+      if (activeLightbox) window.removePhoto(activeLightbox.kind, activeLightbox.productId);
+    };
+    document.getElementById('lightboxReplaceInput').onchange = (e) => {
+      if (activeLightbox && e.target.files[0]) {
+        window.uploadPhoto(activeLightbox.kind, activeLightbox.productId, e.target.files[0]);
+      }
     };
     window.toggleShop = async (id, done) => { await api('/api/objects/shopping_list/' + id, { method: 'PUT', body: JSON.stringify({ done: done ? 1 : 0 }) }); await loadAll(); };
     window.deleteShop = async (id) => { await api('/api/objects/shopping_list/' + id, { method: 'DELETE' }); await loadAll(); };
