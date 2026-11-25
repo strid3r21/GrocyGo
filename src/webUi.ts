@@ -360,7 +360,10 @@ export function renderWebUiHtml(): string {
             <select id="bulkGroupSelect" aria-label="Target group"></select>
             <button id="applyBulkGroupBtn" class="primary sm">Assign to Group</button>
           </div>
-          <button id="clearSelectionBtn" class="sm">Clear</button>
+          <div class="row">
+            <button id="bulkDeleteBtn" class="danger sm">Delete Selected</button>
+            <button id="clearSelectionBtn" class="sm">Clear</button>
+          </div>
         </div>
 
         <div class="table-wrap" id="inventoryTableWrap"></div>
@@ -687,8 +690,9 @@ export function renderWebUiHtml(): string {
       </div>
       <div id="editErr" class="hidden"></div>
       <div class="row" style="gap:8px;margin-top:6px;">
+        <button id="deleteEditBtn" class="danger" type="button">Delete</button>
         <button id="editPrintLabelBtn" type="button" style="flex:1;">Create Label</button>
-        <button id="saveEditBtn" class="primary" style="flex:1.6;">Save Changes</button>
+        <button id="saveEditBtn" class="primary" style="flex:1.5;">Save Changes</button>
       </div>
     </div>
   </div>
@@ -820,6 +824,10 @@ export function renderWebUiHtml(): string {
       ]);
       currentUser = me;
       state = { stock, products, barcodes, groups, locations, units, shopping, keys, activity, users, backups, mcpSettings };
+      const validIds = new Set(products.map((p) => p.id));
+      for (const id of [...selectedIds]) {
+        if (!validIds.has(id)) selectedIds.delete(id);
+      }
       populateDropdowns();
       renderAll();
     }
@@ -885,7 +893,9 @@ export function renderWebUiHtml(): string {
       photo_shelf_remove: 'removed shelf photo for',
       product_create: 'created item',
       product_edit: 'edited',
+      product_delete: 'deleted',
       bulk_group: 'grouped',
+      bulk_delete: 'deleted',
       location_create: 'created location',
       location_edit: 'updated location',
       group_create: 'created group',
@@ -1074,7 +1084,7 @@ export function renderWebUiHtml(): string {
               const verb = ACTION_VERBS[e.transaction_type] || e.transaction_type;
               const qty = Math.abs(Number(e.amount || 0));
               const unit = qty === 1 ? e.qu_name : (e.qu_name_plural || e.qu_name);
-              const showQty = qty > 0 && !['bulk_group', 'photo_product', 'photo_shelf', 'photo_product_remove', 'photo_shelf_remove', 'product_edit', 'product_create'].includes(e.transaction_type);
+              const showQty = qty > 0 && !['bulk_group', 'bulk_delete', 'product_delete', 'photo_product', 'photo_shelf', 'photo_product_remove', 'photo_shelf_remove', 'product_edit', 'product_create'].includes(e.transaction_type);
               const qtyPart = showQty ? qty + (unit ? ' ' + unit : '') + ' ' : '';
               return \`
                 <div class="activity-row">
@@ -1207,6 +1217,51 @@ export function renderWebUiHtml(): string {
       });
       selectedIds.clear();
       await loadAll();
+    };
+    document.getElementById('bulkDeleteBtn').onclick = async () => {
+      const ids = [...selectedIds];
+      if (!ids.length) return;
+      const prodMap = Object.fromEntries(state.products.map((p) => [p.id, p.name]));
+      const names = ids.map((id) => prodMap[id]).filter(Boolean);
+      const preview = names.slice(0, 5).join(', ') + (names.length > 5 ? ', and ' + (names.length - 5) + ' more' : '');
+      const msg = ids.length === 1
+        ? 'Permanently delete "' + (names[0] || 'this item') + '"? This will also remove its stock batches, barcodes, and photos.'
+        : 'Permanently delete ' + ids.length + ' selected items (' + preview + ')? This will also remove their stock batches, barcodes, and photos.';
+      if (!confirm(msg)) return;
+      const btn = document.getElementById('bulkDeleteBtn');
+      btn.disabled = true;
+      try {
+        await api('/api/products/bulk-delete', {
+          method: 'POST',
+          body: JSON.stringify({ product_ids: ids }),
+        });
+        selectedIds.clear();
+        await loadAll();
+      } catch (e) {
+        alert(e.message || 'Failed to delete selected items');
+      } finally {
+        btn.disabled = false;
+      }
+    };
+    document.getElementById('deleteEditBtn').onclick = async () => {
+      if (!editingProductId) return;
+      const p = state.products.find((x) => x.id === editingProductId);
+      const label = p ? p.name : 'this item';
+      if (!confirm('Permanently delete "' + label + '"? This will also remove its stock batches, barcodes, and photos.')) return;
+      const errEl = document.getElementById('editErr');
+      errEl.className = 'hidden';
+      try {
+        await api('/api/products/bulk-delete', {
+          method: 'POST',
+          body: JSON.stringify({ product_ids: [editingProductId] }),
+        });
+        selectedIds.delete(editingProductId);
+        document.getElementById('editModal').classList.remove('open');
+        await loadAll();
+      } catch (e) {
+        errEl.className = 'notice err';
+        errEl.textContent = e.message || 'Failed to delete item';
+      }
     };
 
     // Groups

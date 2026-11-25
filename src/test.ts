@@ -827,7 +827,39 @@ async function runTests() {
     const mergedBatchA = entriesAfterAddToBatch.find((e: any) => Number(e.id) === batchA.id);
     assert.equal(Number(mergedBatchA.amount), 5);
 
-    console.log('ALL SERVER v1.9.1 TESTS PASSED!');
+    // 23. Bulk delete selected items (cascades stock & barcodes, logs activity)
+    const delProd1 = await fetch(`${base}/api/objects/products`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ name: 'Temp Delete Item A', location_id: 1, qu_id_purchase: 1, qu_id_stock: 1 }),
+    }).then((r) => r.json());
+    const delProd2 = await fetch(`${base}/api/objects/products`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ name: 'Temp Delete Item B', location_id: 1, qu_id_purchase: 1, qu_id_stock: 1 }),
+    }).then((r) => r.json());
+    await fetch(`${base}/api/stock/products/${delProd1.created_object_id}/add`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ amount: 2 }),
+    });
+    const bulkDelRes = await fetch(`${base}/api/products/bulk-delete`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ product_ids: [delProd1.created_object_id, delProd2.created_object_id] }),
+    }).then((r) => r.json());
+    assert.equal(bulkDelRes.deleted, 2);
+    assert.deepEqual(bulkDelRes.deleted_names, ['Temp Delete Item A', 'Temp Delete Item B']);
+
+    const remainingProds = await fetch(`${base}/api/objects/products`, { headers }).then((r) => r.json());
+    assert.ok(!remainingProds.some((p: any) => p.id === delProd1.created_object_id));
+    assert.ok(!remainingProds.some((p: any) => p.id === delProd2.created_object_id));
+    assert.ok(remainingProds.some((p: any) => p.id === prodId), 'Unselected product must remain');
+
+    const delActivity = await fetch(`${base}/api/activity?limit=5`, { headers }).then((r) => r.json());
+    assert.ok(delActivity.some((e: any) => e.transaction_type === 'bulk_delete' && e.product_name === '2 items'));
+
+    console.log('ALL SERVER v1.9.2 TESTS PASSED!');
     console.log('\nSample compact MCP inventory_summary output:\n' + summaryText);
     console.log('\nSample compact MCP search_inventory output:\n' + searchText);
   } finally {

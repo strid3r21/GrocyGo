@@ -1246,6 +1246,79 @@ export class InventoryService {
     return { updated };
   }
 
+  bulkDeleteProducts(
+    productIds: number[],
+    userId?: number | null
+  ): { deleted: number; deleted_ids: number[]; deleted_names: string[] } {
+    const cleanIds = Array.from(
+      new Set(productIds.map(Number).filter((n) => Number.isInteger(n) && n > 0))
+    );
+    if (cleanIds.length === 0) throw new Error('No valid product IDs provided');
+
+    const getProd = this.db.prepare(
+      'SELECT id, name, picture_file_name, storage_photo_file_name FROM products WHERE id = ?'
+    );
+    const getBatchPhotos = this.db.prepare(
+      'SELECT DISTINCT photo_file_name FROM stock WHERE product_id = ? AND photo_file_name IS NOT NULL'
+    );
+    const delProd = this.db.prepare('DELETE FROM products WHERE id = ?');
+
+    const deletedIds: number[] = [];
+    const deletedNames: string[] = [];
+    const photosToCheck = new Set<string>();
+
+    for (const pid of cleanIds) {
+      const row = getProd.get(pid) as
+        | {
+            id: number;
+            name: string;
+            picture_file_name: string | null;
+            storage_photo_file_name: string | null;
+          }
+        | undefined;
+      if (!row) continue;
+
+      if (row.picture_file_name) photosToCheck.add(row.picture_file_name);
+      if (row.storage_photo_file_name) photosToCheck.add(row.storage_photo_file_name);
+      const batchPhotos = getBatchPhotos.all(pid) as Array<{ photo_file_name: string }>;
+      for (const bp of batchPhotos) {
+        if (bp.photo_file_name) photosToCheck.add(bp.photo_file_name);
+      }
+
+      const info = delProd.run(pid);
+      if (Number(info.changes || 0) > 0) {
+        deletedIds.push(row.id);
+        deletedNames.push(row.name);
+      }
+    }
+
+    for (const fileName of photosToCheck) {
+      this.cleanupPhotoIfUnused(fileName);
+    }
+
+    if (deletedIds.length > 0) {
+      const previewNames = deletedNames.slice(0, 5).join(', ');
+      const extra = deletedNames.length > 5 ? ` +${deletedNames.length - 5} more` : '';
+      this.logActivity({
+        productId: null,
+        itemLabel:
+          deletedIds.length === 1
+            ? deletedNames[0]
+            : `${deletedIds.length} items`,
+        amount: deletedIds.length,
+        transactionType: deletedIds.length === 1 ? 'product_delete' : 'bulk_delete',
+        note: deletedIds.length > 1 ? `${previewNames}${extra}` : '',
+        userId,
+      });
+    }
+
+    return {
+      deleted: deletedIds.length,
+      deleted_ids: deletedIds,
+      deleted_names: deletedNames,
+    };
+  }
+
   editInventoryItem(
     productId: number,
     payload: {

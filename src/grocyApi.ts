@@ -590,7 +590,7 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
         }
       }
 
-      // ─── Bulk Group Assign & Full Inventory Item Edit ─────────
+      // ─── Bulk Group Assign, Bulk Delete & Full Inventory Item Edit ─────────
       if (method === 'POST' && pathname === '/api/products/bulk-group') {
         const body = await readJsonBody(req);
         const ids = Array.isArray(body.product_ids) ? body.product_ids : [];
@@ -601,6 +601,13 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
             ? null
             : Number(body.product_group_id);
         sendJson(res, 200, service.bulkAssignProductGroup(ids, groupId, currentUser.id));
+        return;
+      }
+
+      if (method === 'POST' && pathname === '/api/products/bulk-delete') {
+        const body = await readJsonBody(req);
+        const ids = Array.isArray(body.product_ids) ? body.product_ids : [];
+        sendJson(res, 200, service.bulkDeleteProducts(ids, currentUser.id));
         return;
       }
 
