@@ -1349,6 +1349,107 @@ export class InventoryService {
     return { added };
   }
 
+  refillConsumedToShoppingList(
+    listId = 1,
+    days = 7,
+    userId?: number | null
+  ): {
+    added: number;
+    updated: number;
+    items: Array<{ product_id: number; name: string; amount: number }>;
+  } {
+    const safeDays = Math.min(90, Math.max(1, Math.round(Number(days) || 7)));
+    const rows = this.db
+      .prepare(
+        `
+        SELECT
+          sl.product_id,
+          p.name AS product_name,
+          SUM(ABS(sl.amount)) AS consumed_qty
+        FROM stock_log sl
+        INNER JOIN products p ON p.id = sl.product_id
+        WHERE sl.product_id IS NOT NULL
+          AND sl.transaction_type IN ('consume', 'spoiled')
+          AND datetime(sl.row_created_timestamp) >= datetime('now', '-' || ? || ' days')
+        GROUP BY sl.product_id
+        HAVING SUM(ABS(sl.amount)) > 0
+        ORDER BY p.name COLLATE NOCASE ASC
+      `
+      )
+      .all(safeDays) as Array<{
+      product_id: number;
+      product_name: string;
+      consumed_qty: number;
+    }>;
+
+    let added = 0;
+    let updated = 0;
+    const items: Array<{ product_id: number; name: string; amount: number }> = [];
+
+    for (const row of rows) {
+      const qty = Math.round(Number(row.consumed_qty) * 100) / 100;
+      if (!Number.isFinite(qty) || qty <= 0) continue;
+
+      const existing = this.db
+        .prepare(
+          'SELECT id, amount FROM shopping_list WHERE shopping_list_id = ? AND product_id = ? AND done = 0'
+        )
+        .get(listId, row.product_id) as { id: number; amount: number } | undefined;
+
+      if (existing) {
+        if (Number(existing.amount) < qty) {
+          this.db
+            .prepare('UPDATE shopping_list SET amount = ? WHERE id = ?')
+            .run(qty, existing.id);
+          updated++;
+          items.push({ product_id: row.product_id, name: row.product_name, amount: qty });
+        }
+      } else {
+        this.db
+          .prepare(
+            'INSERT INTO shopping_list (product_id, amount, shopping_list_id, done, added_by_user_id) VALUES (?, ?, ?, 0, ?)'
+          )
+          .run(row.product_id, qty, listId, userId ?? null);
+        this.logActivity({
+          productId: row.product_id,
+          itemLabel: row.product_name,
+          amount: qty,
+          transactionType: 'shopping_add',
+          note: `Refill (used in last ${safeDays}d)`,
+          userId,
+        });
+        this.recordShoppingListNotification(userId ?? null, row.product_name);
+        added++;
+        items.push({ product_id: row.product_id, name: row.product_name, amount: qty });
+      }
+    }
+
+    return { added, updated, items };
+  }
+
+  setAllShoppingListDone(
+    listId = 1,
+    done: boolean,
+    userId?: number | null
+  ): { updated: number } {
+    const info = done
+      ? this.db
+          .prepare(
+            `UPDATE shopping_list
+             SET done = 1, completed_by_user_id = ?, completed_at = datetime('now')
+             WHERE shopping_list_id = ? AND done = 0`
+          )
+          .run(userId ?? null, listId)
+      : this.db
+          .prepare(
+            `UPDATE shopping_list
+             SET done = 0, completed_by_user_id = NULL, completed_at = NULL
+             WHERE shopping_list_id = ? AND done = 1`
+          )
+          .run(listId);
+    return { updated: Number(info.changes || 0) };
+  }
+
   recordShoppingListNotification(actorUserId: number | null, itemName: string) {
     const cleanItem = itemName.trim() || 'an item';
     let actorName = 'Someone';

@@ -373,8 +373,8 @@ export function renderWebUiHtml(): string {
             <input id="shopItemInput" placeholder="Add to global household shopping list..." style="flex:1;" />
             <input id="shopQtyInput" type="number" value="1" min="1" style="width:80px;" />
             <button id="addShopBtn" class="primary">Add</button>
-            <button id="addMissingBtn">Add Low Stock</button>
-            <button id="clearDoneBtn">Clear Checked</button>
+            <button id="addMissingBtn">Refill (7d)</button>
+            <button id="clearDoneBtn">Delete Checked</button>
           </div>
         </div>
         <div id="shoppingList"></div>
@@ -1826,7 +1826,7 @@ export function renderWebUiHtml(): string {
       document.getElementById('shopItemInput').value = '';
       await loadAll();
     };
-    document.getElementById('addMissingBtn').onclick = async () => { await api('/api/stock/shoppinglist/add-missing-products', { method: 'POST', body: '{}' }); await loadAll(); };
+    document.getElementById('addMissingBtn').onclick = async () => { await api('/api/stock/shoppinglist/refill-consumed', { method: 'POST', body: JSON.stringify({ days: 7 }) }); await loadAll(); };
     document.getElementById('clearDoneBtn').onclick = async () => { await api('/api/stock/shoppinglist/clear', { method: 'POST', body: JSON.stringify({ done_only: true }) }); await loadAll(); };
     document.getElementById('addLocBtn').onclick = async () => {
       const name = document.getElementById('locNameInput').value.trim();

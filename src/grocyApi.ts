@@ -682,6 +682,30 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
         return;
       }
 
+      if (method === 'POST' && pathname === '/api/stock/shoppinglist/refill-consumed') {
+        const body = await readJsonBody(req);
+        const listId = Number(body.list_id || 1);
+        const days = Number(body.days || 7);
+        sendJson(
+          res,
+          200,
+          service.refillConsumedToShoppingList(listId, days, currentUser.id)
+        );
+        return;
+      }
+
+      if (method === 'POST' && pathname === '/api/stock/shoppinglist/set-all-done') {
+        const body = await readJsonBody(req);
+        const listId = Number(body.list_id || 1);
+        const done = Boolean(body.done);
+        sendJson(
+          res,
+          200,
+          service.setAllShoppingListDone(listId, done, currentUser.id)
+        );
+        return;
+      }
+
       if (method === 'POST' && pathname === '/api/stock/shoppinglist/clear') {
         const body = await readJsonBody(req);
         const listId = Number(body.list_id || 1);

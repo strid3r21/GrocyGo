@@ -693,7 +693,61 @@ async function runTests() {
       body: JSON.stringify({ write_enabled: false, delete_enabled: false }),
     });
 
-    console.log('ALL SERVER v1.7.0 TESTS PASSED!');
+    // 19. Shopping list Refill (consumed in last 7 days) + Set-All-Done + Edit Qty
+    // Clear existing shopping list first
+    await fetch(`${base}/api/stock/shoppinglist/clear`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ done_only: false }),
+    });
+    // Refill should pick up the Milk we consumed earlier (qty 1)
+    const refillRes = await fetch(`${base}/api/stock/shoppinglist/refill-consumed`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ days: 7 }),
+    }).then((r) => r.json());
+    assert.ok(refillRes.added >= 1, `Expected at least 1 refilled item, got ${JSON.stringify(refillRes)}`);
+    const shopAfterRefill = await fetch(`${base}/api/objects/shopping_list`, { headers }).then((r) =>
+      r.json()
+    );
+    const refilledMilk = shopAfterRefill.find((i: any) => i.product_id === prodId);
+    assert.ok(refilledMilk, 'Refilled product should be on shopping list');
+    assert.equal(Number(refilledMilk.amount), 2);
+
+    // Edit shopping item qty
+    await fetch(`${base}/api/objects/shopping_list/${refilledMilk.id}`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ amount: 4 }),
+    });
+    const shopAfterEdit = await fetch(`${base}/api/objects/shopping_list`, { headers }).then((r) =>
+      r.json()
+    );
+    assert.equal(Number(shopAfterEdit.find((i: any) => i.id === refilledMilk.id).amount), 4);
+
+    // Select all done & unselect all
+    const setAllRes = await fetch(`${base}/api/stock/shoppinglist/set-all-done`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ done: true }),
+    }).then((r) => r.json());
+    assert.ok(setAllRes.updated >= 1);
+    const shopAllDone = await fetch(`${base}/api/objects/shopping_list`, { headers }).then((r) =>
+      r.json()
+    );
+    assert.ok(shopAllDone.every((i: any) => Number(i.done) === 1));
+
+    await fetch(`${base}/api/stock/shoppinglist/set-all-done`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ done: false }),
+    });
+    const shopNoneDone = await fetch(`${base}/api/objects/shopping_list`, { headers }).then((r) =>
+      r.json()
+    );
+    assert.ok(shopNoneDone.every((i: any) => Number(i.done) === 0));
+
+    console.log('ALL SERVER v1.8.0 TESTS PASSED!');
     console.log('\nSample compact MCP inventory_summary output:\n' + summaryText);
     console.log('\nSample compact MCP search_inventory output:\n' + searchText);
   } finally {
