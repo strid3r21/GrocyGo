@@ -358,7 +358,46 @@ async function runTests() {
     });
     assert.ok(mcpActivity.result.content[0].text.includes('Sarah'));
 
-    console.log('ALL SERVER + PHOTO + SHOPPING + MCP + QR + IMPORT + MULTI-USER TESTS PASSED!');
+    // 13. Bulk group assign, full item edit (rename + expiry + qty), and photo activity log
+    const grpCreate = await fetch(`${base}/api/objects/product_groups`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ name: 'Perishables' }),
+    }).then((r) => r.json());
+    const bulkRes = await fetch(`${base}/api/products/bulk-group`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ product_ids: [prodId], product_group_id: grpCreate.created_object_id }),
+    }).then((r) => r.json());
+    assert.equal(bulkRes.updated, 1);
+
+    const edited = await fetch(`${base}/api/inventory/item/${prodId}`, {
+      method: 'PUT',
+      headers: sarahHeaders,
+      body: JSON.stringify({
+        name: 'Organic Whole Milk (A2)',
+        best_before_date: '2027-02-14',
+        amount: 3,
+      }),
+    }).then((r) => r.json());
+    assert.equal(edited.product.name, 'Organic Whole Milk (A2)');
+    assert.equal(edited.stock_amount, 3);
+    assert.equal(edited.next_due_date, '2027-02-14');
+
+    const fullActivity = await fetch(`${base}/api/activity?limit=25`, { headers }).then((r) => r.json());
+    assert.ok(fullActivity.some((e: any) => e.transaction_type === 'photo_product'));
+    assert.ok(fullActivity.some((e: any) => e.transaction_type === 'photo_shelf'));
+    assert.ok(fullActivity.some((e: any) => e.transaction_type === 'bulk_group'));
+    assert.ok(
+      fullActivity.some(
+        (e: any) => e.transaction_type === 'product_edit' && e.user_display_name === 'Sarah'
+      )
+    );
+
+    const stockOverview = await fetch(`${base}/api/stock`, { headers }).then((r) => r.json());
+    assert.ok(stockOverview[0].last_added_at);
+
+    console.log('ALL SERVER v1.3.0 TESTS PASSED!');
     console.log('\nSample compact MCP inventory_summary output:\n' + summaryText);
     console.log('\nSample compact MCP search_inventory output:\n' + searchText);
   } finally {

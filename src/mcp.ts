@@ -456,6 +456,15 @@ function executeTool(name: string, args: Record<string, any>, service: Inventory
       transfer: 'moved',
       shopping_add: 'added to shopping list',
       shopping_done: 'checked off shopping list',
+      photo_product: 'updated product photo for',
+      photo_shelf: 'updated shelf photo for',
+      product_create: 'created item',
+      product_edit: 'edited',
+      bulk_group: 'grouped',
+      location_create: 'created location',
+      location_edit: 'updated location',
+      group_create: 'created group',
+      group_edit: 'updated group',
     };
 
     const lines = events.map((e) => {

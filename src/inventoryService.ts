@@ -310,6 +310,15 @@ export class InventoryService {
           SUM(s.amount) AS total_amount,
           SUM(CASE WHEN s.open = 1 THEN s.amount ELSE 0 END) AS opened_amount,
           MIN(COALESCE(NULLIF(s.best_before_date, ''), '2999-12-31')) AS next_due_date,
+          MAX(s.row_created_timestamp) AS last_added_at,
+          (
+            SELECT u.display_name
+            FROM stock s4
+            LEFT JOIN users u ON u.id = s4.added_by_user_id
+            WHERE s4.product_id = p.id
+            ORDER BY s4.id DESC
+            LIMIT 1
+          ) AS last_added_by,
           (
             SELECT s2.photo_file_name
             FROM stock s2
@@ -336,6 +345,8 @@ export class InventoryService {
         total_amount,
         opened_amount,
         next_due_date,
+        last_added_at,
+        last_added_by,
         latest_stock_photo,
         photo_count,
         ...product
@@ -348,6 +359,8 @@ export class InventoryService {
         amount_opened: Number(opened_amount || 0),
         amount_opened_aggregated: Number(opened_amount || 0),
         best_before_date: next_due_date || NEVER_EXPIRES,
+        last_added_at: last_added_at || product.row_created_timestamp || null,
+        last_added_by: last_added_by || null,
         is_aggregated_amount: 0,
         due_type: product.due_type ?? 1,
         product_photo_file_name: product.picture_file_name || null,
@@ -916,19 +929,31 @@ export class InventoryService {
     };
   }
 
-  attachPhotoToStockEntry(entryId: number, fileName: string) {
+  attachPhotoToStockEntry(entryId: number, fileName: string, userId?: number | null) {
     const existing = this.db
-      .prepare('SELECT id, product_id, photo_file_name FROM stock WHERE id = ?')
-      .get(entryId) as { id: number; product_id: number; photo_file_name: string | null } | undefined;
+      .prepare('SELECT id, product_id, location_id, photo_file_name FROM stock WHERE id = ?')
+      .get(entryId) as
+      | { id: number; product_id: number; location_id: number; photo_file_name: string | null }
+      | undefined;
     if (!existing) throw new Error(`Stock entry ${entryId} not found`);
 
-    this.db
-      .prepare('UPDATE stock SET photo_file_name = ? WHERE id = ?')
-      .run(fileName, entryId);
+    const prod = this.db
+      .prepare('SELECT name FROM products WHERE id = ?')
+      .get(existing.product_id) as { name: string } | undefined;
 
+    this.db.prepare('UPDATE stock SET photo_file_name = ? WHERE id = ?').run(fileName, entryId);
     this.db
       .prepare('UPDATE products SET storage_photo_file_name = ? WHERE id = ?')
       .run(fileName, existing.product_id);
+
+    this.logActivity({
+      productId: existing.product_id,
+      itemLabel: prod?.name || `Product #${existing.product_id}`,
+      amount: 0,
+      transactionType: 'photo_shelf',
+      locationId: existing.location_id,
+      userId,
+    });
 
     if (existing.photo_file_name && existing.photo_file_name !== fileName) {
       this.cleanupPhotoIfUnused(existing.photo_file_name);
@@ -936,15 +961,26 @@ export class InventoryService {
     return { entry_id: entryId, product_id: existing.product_id, file_name: fileName };
   }
 
-  attachPhotoToProduct(productId: number, fileName: string) {
+  attachPhotoToProduct(productId: number, fileName: string, userId?: number | null) {
     const existing = this.db
-      .prepare('SELECT id, picture_file_name FROM products WHERE id = ?')
-      .get(productId) as { id: number; picture_file_name: string | null } | undefined;
+      .prepare('SELECT id, name, location_id, picture_file_name FROM products WHERE id = ?')
+      .get(productId) as
+      | { id: number; name: string; location_id: number; picture_file_name: string | null }
+      | undefined;
     if (!existing) throw new Error(`Product ${productId} not found`);
 
     this.db
       .prepare('UPDATE products SET picture_file_name = ? WHERE id = ?')
       .run(fileName, productId);
+
+    this.logActivity({
+      productId,
+      itemLabel: existing.name,
+      amount: 0,
+      transactionType: 'photo_product',
+      locationId: existing.location_id,
+      userId,
+    });
 
     if (existing.picture_file_name && existing.picture_file_name !== fileName) {
       this.cleanupPhotoIfUnused(existing.picture_file_name);
@@ -952,20 +988,168 @@ export class InventoryService {
     return { product_id: productId, file_name: fileName };
   }
 
-  attachStoragePhotoToProduct(productId: number, fileName: string) {
+  attachStoragePhotoToProduct(productId: number, fileName: string, userId?: number | null) {
     const existing = this.db
-      .prepare('SELECT id, storage_photo_file_name FROM products WHERE id = ?')
-      .get(productId) as { id: number; storage_photo_file_name: string | null } | undefined;
+      .prepare('SELECT id, name, location_id, storage_photo_file_name FROM products WHERE id = ?')
+      .get(productId) as
+      | { id: number; name: string; location_id: number; storage_photo_file_name: string | null }
+      | undefined;
     if (!existing) throw new Error(`Product ${productId} not found`);
 
     this.db
       .prepare('UPDATE products SET storage_photo_file_name = ? WHERE id = ?')
       .run(fileName, productId);
 
+    this.logActivity({
+      productId,
+      itemLabel: existing.name,
+      amount: 0,
+      transactionType: 'photo_shelf',
+      locationId: existing.location_id,
+      userId,
+    });
+
     if (existing.storage_photo_file_name && existing.storage_photo_file_name !== fileName) {
       this.cleanupPhotoIfUnused(existing.storage_photo_file_name);
     }
     return { product_id: productId, file_name: fileName };
+  }
+
+  bulkAssignProductGroup(
+    productIds: number[],
+    groupId: number | null,
+    userId?: number | null
+  ): { updated: number } {
+    const cleanIds = productIds.map(Number).filter((n) => Number.isInteger(n) && n > 0);
+    if (cleanIds.length === 0) throw new Error('No valid product IDs provided');
+
+    let groupName = 'Ungrouped';
+    if (groupId !== null) {
+      const g = this.db.prepare('SELECT id, name FROM product_groups WHERE id = ?').get(groupId) as
+        | { id: number; name: string }
+        | undefined;
+      if (!g) throw new Error(`Product group #${groupId} not found`);
+      groupName = g.name;
+    }
+
+    const stmt = this.db.prepare('UPDATE products SET product_group_id = ? WHERE id = ?');
+    let updated = 0;
+    for (const pid of cleanIds) {
+      const info = stmt.run(groupId, pid);
+      updated += Number(info.changes || 0);
+    }
+
+    this.logActivity({
+      productId: cleanIds.length === 1 ? cleanIds[0] : null,
+      itemLabel: `${updated} ${updated === 1 ? 'item' : 'items'}`,
+      amount: updated,
+      transactionType: 'bulk_group',
+      note: `Group: ${groupName}`,
+      userId,
+    });
+
+    return { updated };
+  }
+
+  editInventoryItem(
+    productId: number,
+    payload: {
+      name?: string;
+      description?: string;
+      product_group_id?: number | null;
+      location_id?: number;
+      min_stock_amount?: number;
+      amount?: number;
+      best_before_date?: string | null;
+    },
+    userId?: number | null
+  ) {
+    const existing = this.db.prepare('SELECT * FROM products WHERE id = ?').get(productId) as any;
+    if (!existing) throw new Error(`Product #${productId} not found`);
+
+    const changes: string[] = [];
+
+    const nextName =
+      payload.name !== undefined && payload.name.trim() ? payload.name.trim() : existing.name;
+    if (nextName !== existing.name) changes.push(`renamed from "${existing.name}"`);
+
+    const nextDesc =
+      payload.description !== undefined ? payload.description.trim() : existing.description;
+    const nextGroupId =
+      payload.product_group_id !== undefined ? payload.product_group_id : existing.product_group_id;
+    if (nextGroupId !== existing.product_group_id) changes.push('group updated');
+
+    const nextLocId =
+      payload.location_id !== undefined ? Number(payload.location_id) : existing.location_id;
+    if (nextLocId !== existing.location_id) changes.push('location updated');
+
+    const nextMin =
+      payload.min_stock_amount !== undefined
+        ? Math.max(0, Number(payload.min_stock_amount))
+        : existing.min_stock_amount;
+
+    this.db
+      .prepare(
+        `UPDATE products
+         SET name = ?, description = ?, product_group_id = ?, location_id = ?, min_stock_amount = ?
+         WHERE id = ?`
+      )
+      .run(nextName, nextDesc, nextGroupId ?? null, nextLocId, nextMin, productId);
+
+    // Update stock location if product default location changed and user requested it
+    if (payload.location_id !== undefined && nextLocId !== existing.location_id) {
+      this.db
+        .prepare('UPDATE stock SET location_id = ? WHERE product_id = ?')
+        .run(nextLocId, productId);
+    }
+
+    // Update expiry date across active batches if supplied
+    if (payload.best_before_date !== undefined) {
+      const nextBbd = payload.best_before_date?.trim() || NEVER_EXPIRES;
+      const info = this.db
+        .prepare('UPDATE stock SET best_before_date = ? WHERE product_id = ? AND amount > 0')
+        .run(nextBbd, productId);
+      if (Number(info.changes) > 0) {
+        changes.push(`expiry -> ${nextBbd === NEVER_EXPIRES ? 'none' : nextBbd}`);
+      }
+    }
+
+    // Update total stock amount if supplied
+    if (payload.amount !== undefined && Number.isFinite(Number(payload.amount))) {
+      const targetAmt = Math.max(0, Number(payload.amount));
+      const currentAmt = (
+        this.db
+          .prepare('SELECT COALESCE(SUM(amount), 0) AS total FROM stock WHERE product_id = ?')
+          .get(productId) as { total: number }
+      ).total;
+      if (Math.abs(targetAmt - currentAmt) > 1e-6) {
+        this.inventoryProduct(
+          productId,
+          {
+            new_amount: targetAmt,
+            location_id: nextLocId,
+            best_before_date: payload.best_before_date || undefined,
+            note: 'Edited in inventory',
+          },
+          userId
+        );
+        changes.push(`qty ${currentAmt} -> ${targetAmt}`);
+      }
+    }
+
+    if (changes.length > 0) {
+      this.logActivity({
+        productId,
+        itemLabel: nextName,
+        amount: 0,
+        transactionType: 'product_edit',
+        locationId: nextLocId,
+        note: changes.join(', '),
+        userId,
+      });
+    }
+
+    return this.getProductDetails(productId);
   }
 
   getShoppingListItems(listId?: number): any[] {

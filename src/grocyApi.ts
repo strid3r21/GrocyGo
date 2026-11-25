@@ -397,7 +397,7 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
       if (method === 'POST' && entryPhotoMatch) {
         const entryId = Number(entryPhotoMatch[1]);
         const saved = await extractUploadedPhoto(req, ctx.photosDir);
-        const result = service.attachPhotoToStockEntry(entryId, saved.fileName);
+        const result = service.attachPhotoToStockEntry(entryId, saved.fileName, currentUser.id);
         sendJson(res, 200, {
           ...result,
           url: `/api/photos/${saved.fileName}`,
@@ -410,7 +410,7 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
       if (method === 'POST' && productPhotoMatch) {
         const productId = Number(productPhotoMatch[1]);
         const saved = await extractUploadedPhoto(req, ctx.photosDir);
-        const result = service.attachPhotoToProduct(productId, saved.fileName);
+        const result = service.attachPhotoToProduct(productId, saved.fileName, currentUser.id);
         sendJson(res, 200, {
           ...result,
           url: `/api/photos/${saved.fileName}`,
@@ -423,12 +423,34 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
       if (method === 'POST' && productStoragePhotoMatch) {
         const productId = Number(productStoragePhotoMatch[1]);
         const saved = await extractUploadedPhoto(req, ctx.photosDir);
-        const result = service.attachStoragePhotoToProduct(productId, saved.fileName);
+        const result = service.attachStoragePhotoToProduct(productId, saved.fileName, currentUser.id);
         sendJson(res, 200, {
           ...result,
           url: `/api/photos/${saved.fileName}`,
           size: saved.size,
         });
+        return;
+      }
+
+      // ─── Bulk Group Assign & Full Inventory Item Edit ─────────
+      if (method === 'POST' && pathname === '/api/products/bulk-group') {
+        const body = await readJsonBody(req);
+        const ids = Array.isArray(body.product_ids) ? body.product_ids : [];
+        const groupId =
+          body.product_group_id === null ||
+          body.product_group_id === '' ||
+          body.product_group_id === undefined
+            ? null
+            : Number(body.product_group_id);
+        sendJson(res, 200, service.bulkAssignProductGroup(ids, groupId, currentUser.id));
+        return;
+      }
+
+      const editItemMatch = pathname.match(/^\/api\/inventory\/item\/(\d+)$/);
+      if (method === 'PUT' && editItemMatch) {
+        const productId = Number(editItemMatch[1]);
+        const body = await readJsonBody(req);
+        sendJson(res, 200, service.editInventoryItem(productId, body, currentUser.id));
         return;
       }
 
@@ -672,6 +694,29 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
               note: prod && body.note ? String(body.note) : '',
               userId: currentUser.id,
             });
+          } else if (table === 'products') {
+            service.logActivity({
+              productId: Number(info.lastInsertRowid),
+              itemLabel: String(body.name || 'Item'),
+              amount: 0,
+              transactionType: 'product_create',
+              locationId: body.location_id ? Number(body.location_id) : null,
+              userId: currentUser.id,
+            });
+          } else if (table === 'locations') {
+            service.logActivity({
+              itemLabel: String(body.name || 'Location'),
+              amount: 0,
+              transactionType: 'location_create',
+              userId: currentUser.id,
+            });
+          } else if (table === 'product_groups') {
+            service.logActivity({
+              itemLabel: String(body.name || 'Group'),
+              amount: 0,
+              transactionType: 'group_create',
+              userId: currentUser.id,
+            });
           }
 
           const response: Record<string, unknown> = {
@@ -724,6 +769,28 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
                 userId: currentUser.id,
               });
             }
+          } else if (table === 'products') {
+            service.logActivity({
+              productId: idParam,
+              itemLabel: String(body.name || `Item #${idParam}`),
+              amount: 0,
+              transactionType: 'product_edit',
+              userId: currentUser.id,
+            });
+          } else if (table === 'locations') {
+            service.logActivity({
+              itemLabel: String(body.name || `Location #${idParam}`),
+              amount: 0,
+              transactionType: 'location_edit',
+              userId: currentUser.id,
+            });
+          } else if (table === 'product_groups') {
+            service.logActivity({
+              itemLabel: String(body.name || `Group #${idParam}`),
+              amount: 0,
+              transactionType: 'group_edit',
+              userId: currentUser.id,
+            });
           }
 
           res.writeHead(204, { 'Access-Control-Allow-Origin': '*' });
