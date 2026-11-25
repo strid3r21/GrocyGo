@@ -808,7 +808,26 @@ async function runTests() {
     assert.equal(Number(prodWithNutrition.calories_kcal), 150);
     assert.equal(prodWithNutrition.nutriscore_grade, 'b');
 
-    console.log('ALL SERVER v1.9.0 TESTS PASSED!');
+    // 22. Adding into a specific existing batch increments that batch instead of creating a new one
+    const entriesBeforeAddToBatch = await fetch(`${base}/api/stock/products/${prodId}/entries`, {
+      headers,
+    }).then((r) => r.json());
+    const countBefore = entriesBeforeAddToBatch.length;
+    const addToBatchRes = await fetch(`${base}/api/stock/products/${prodId}/add`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ amount: 3, stock_entry_id: batchA.id }),
+    }).then((r) => r.json());
+    assert.equal(Number(addToBatchRes.id), batchA.id);
+    assert.equal(Number(addToBatchRes.amount), 5);
+    const entriesAfterAddToBatch = await fetch(`${base}/api/stock/products/${prodId}/entries`, {
+      headers,
+    }).then((r) => r.json());
+    assert.equal(entriesAfterAddToBatch.length, countBefore, 'Should not create a new batch');
+    const mergedBatchA = entriesAfterAddToBatch.find((e: any) => Number(e.id) === batchA.id);
+    assert.equal(Number(mergedBatchA.amount), 5);
+
+    console.log('ALL SERVER v1.9.1 TESTS PASSED!');
     console.log('\nSample compact MCP inventory_summary output:\n' + summaryText);
     console.log('\nSample compact MCP search_inventory output:\n' + searchText);
   } finally {

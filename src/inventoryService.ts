@@ -555,6 +555,7 @@ export class InventoryService {
       price?: number;
       location_id?: number;
       shopping_location_id?: number;
+      stock_entry_id?: number;
       note?: string;
       photo_file_name?: string;
     },
@@ -570,6 +571,53 @@ export class InventoryService {
       throw new Error('Amount must be greater than 0');
     }
 
+    const photoFileName = payload.photo_file_name?.trim() || null;
+
+    // If a specific existing batch was selected, add the quantity directly into that batch
+    if (payload.stock_entry_id) {
+      const existing = this.db
+        .prepare('SELECT * FROM stock WHERE id = ? AND product_id = ? AND amount > 0')
+        .get(payload.stock_entry_id, productId) as any;
+      if (existing) {
+        const nextAmount = Math.round((Number(existing.amount) + amount) * 1000) / 1000;
+        const nextNote = payload.note?.trim() ? payload.note.trim() : existing.note || '';
+        const nextPrice = payload.price ?? existing.price ?? null;
+        const nextPhoto = photoFileName || existing.photo_file_name || null;
+
+        this.db
+          .prepare(
+            'UPDATE stock SET amount = ?, note = ?, price = ?, photo_file_name = ? WHERE id = ?'
+          )
+          .run(nextAmount, nextNote, nextPrice, nextPhoto, existing.id);
+
+        if (photoFileName) {
+          this.db
+            .prepare('UPDATE products SET storage_photo_file_name = ? WHERE id = ?')
+            .run(photoFileName, productId);
+        }
+
+        this.logActivity({
+          productId,
+          itemLabel: product.name,
+          amount,
+          transactionType: 'purchase',
+          locationId: Number(existing.location_id),
+          note: payload.note?.trim() || '',
+          userId,
+        });
+
+        return {
+          id: Number(existing.id),
+          stock_id: existing.stock_id,
+          product_id: productId,
+          amount: nextAmount,
+          location_id: Number(existing.location_id),
+          best_before_date: existing.best_before_date,
+          photo_file_name: nextPhoto,
+        };
+      }
+    }
+
     const locationId = payload.location_id || product.location_id;
     let bbd = payload.best_before_date?.trim() || '';
     if (!bbd) {
@@ -583,7 +631,6 @@ export class InventoryService {
     }
 
     const stockId = crypto.randomBytes(8).toString('hex');
-    const photoFileName = payload.photo_file_name?.trim() || null;
 
     const info = this.db
       .prepare(
