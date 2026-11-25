@@ -1,11 +1,13 @@
 FROM node:24-slim AS builder
 WORKDIR /app
-COPY package.json tsconfig.json ./
-RUN npm install
+COPY package.json package-lock.json tsconfig.json ./
+RUN npm ci
 COPY src ./src
 RUN npm run build
 
 FROM node:24-slim
+LABEL org.opencontainers.image.source="https://github.com/strid3r21/GrocyGo"
+LABEL org.opencontainers.image.description="Lightweight Food Inventory & Shopping List server with Product + Shelf Photos and built-in MCP server"
 WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=9283

@@ -6,19 +6,42 @@ Lightweight, self-hosted **Food Inventory & Shopping List** server with **Produc
 - **Grocy-compatible REST API** for stock, locations, products, barcodes, and shopping lists
 - **Dual Photos**: stores both a **Product Photo** (the item itself) and a **Storage/Shelf Photo** (where it's stored on the shelf, per batch or product), both updatable anytime
 - **Built-in Read-Only MCP Server (`/mcp`)** with ultra-compact 1-line-per-item responses (~85–90% fewer tokens than raw JSON)
-- Companion mobile app: [grocygo-android](https://github.com/strid3r21/grocygo-android)
 
-## Quick Start (Docker)
+---
+
+## Install on Unraid (Docker Template)
+
+1. Open the **Unraid Terminal** (`>_` icon in the top-right bar) and download the template:
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/strid3r21/GrocyGo/main/unraid/grocygo.xml \
+     -o /boot/config/plugins/dockerMan/templates-user/my-grocygo.xml
+   ```
+2. In the Unraid WebUI, go to **Docker** → **Add Container** → click **Select a template** → choose **grocygo**.
+3. Adjust the port (`9283`), appdata path (`/mnt/user/appdata/grocygo`), timezone, and optional `INITIAL_API_KEY`, then click **Apply**.
+4. Open the container **Logs** on first boot to copy your generated API key (unless you set `INITIAL_API_KEY`).
+
+---
+
+## Quick Start (Docker Compose)
 
 ```bash
 docker compose up -d --build
 docker compose logs -f
 ```
 
-On first launch, an initial API key is generated and printed in the logs (or set `INITIAL_API_KEY` in `docker-compose.yml`).
+Or pull the prebuilt multi-arch image (`linux/amd64` & `linux/arm64`):
+```bash
+docker run -d --name grocygo \
+  -p 9283:9283 \
+  -v $(pwd)/data:/data \
+  ghcr.io/strid3r21/grocygo:latest
+```
+
 - **Web UI & REST API:** `http://<host>:9283`
 - **MCP Endpoint:** `http://<host>:9283/mcp`
-- **Persistent Data (SQLite DB + Photos):** `./data/`
+- **Persistent Data (SQLite DB + Photos):** `/data`
+
+---
 
 ## Connecting AI Agents via MCP
 
