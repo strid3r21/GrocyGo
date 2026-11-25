@@ -300,6 +300,22 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
         return;
       }
 
+      // ─── Shopping List Notifications (other household users) ──
+      if (method === 'GET' && pathname === '/api/notifications') {
+        const afterId = Number(url.searchParams.get('after_id') || 0);
+        const limit = Number(url.searchParams.get('limit') || 30);
+        sendJson(
+          res,
+          200,
+          service.getNotificationsForUser(
+            currentUser.id,
+            Number.isFinite(afterId) ? afterId : 0,
+            Number.isFinite(limit) ? limit : 30
+          )
+        );
+        return;
+      }
+
       // ─── MCP Streamable HTTP Endpoint ─────────────────────────
       if (pathname === '/mcp') {
         if (method === 'POST') {
@@ -753,14 +769,16 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
                   .prepare('SELECT name FROM products WHERE id = ?')
                   .get(Number(body.product_id)) as { name: string } | undefined)
               : undefined;
+            const itemName = prod?.name || String(body.note || 'Item');
             service.logActivity({
               productId: body.product_id ? Number(body.product_id) : null,
-              itemLabel: prod?.name || String(body.note || 'Item'),
+              itemLabel: itemName,
               amount: Number(body.amount || 1),
               transactionType: 'shopping_add',
               note: prod && body.note ? String(body.note) : '',
               userId: currentUser.id,
             });
+            service.recordShoppingListNotification(currentUser.id, itemName);
           } else if (table === 'products') {
             service.logActivity({
               productId: Number(info.lastInsertRowid),

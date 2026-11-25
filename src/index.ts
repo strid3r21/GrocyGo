@@ -19,7 +19,7 @@ export function startServer(port = PORT, host = HOST, dataDir = DATA_DIR) {
   server.listen(port, host, () => {
     console.log('');
     console.log('====================================================');
-    console.log('  GrocyGo Server v1.3.0 (Food Inventory + MCP)');
+    console.log('  GrocyGo Server v1.4.0 (Food Inventory + MCP)');
     console.log('====================================================');
     console.log(`  Web UI & API : http://${host === '0.0.0.0' ? 'localhost' : host}:${port}`);
     console.log(`  MCP Endpoint : http://${host === '0.0.0.0' ? 'localhost' : host}:${port}/mcp`);

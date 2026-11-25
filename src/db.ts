@@ -163,11 +163,23 @@ export function initDatabase(dataDir: string): DbContext {
       row_created_timestamp TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS notifications (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      type TEXT NOT NULL,
+      actor_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      actor_name TEXT NOT NULL,
+      item_name TEXT NOT NULL,
+      title TEXT NOT NULL,
+      body TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     CREATE INDEX IF NOT EXISTS idx_stock_product ON stock(product_id);
     CREATE INDEX IF NOT EXISTS idx_stock_location ON stock(location_id);
     CREATE INDEX IF NOT EXISTS idx_barcodes_code ON product_barcodes(barcode);
     CREATE INDEX IF NOT EXISTS idx_shopping_list_list ON shopping_list(shopping_list_id);
     CREATE INDEX IF NOT EXISTS idx_stock_log_time ON stock_log(id DESC);
+    CREATE INDEX IF NOT EXISTS idx_notifications_id ON notifications(id DESC);
   `);
 
   // Safe migrations for existing databases

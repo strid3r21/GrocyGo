@@ -460,7 +460,46 @@ async function runTests() {
     pruneOldBackups(tmpDir, 7);
     assert.equal(listDatabaseBackups(tmpDir).length, 7);
 
-    console.log('ALL SERVER v1.3.0 TESTS PASSED!');
+    // 16. Shopping-list-only notifications (other users notified; actor & stock actions NOT notified)
+    const beforeNotifs = await fetch(`${base}/api/notifications?after_id=0`, { headers }).then((r) =>
+      r.json()
+    );
+    const startId = beforeNotifs.latest_id;
+
+    // Stock add & consume must NOT generate notifications
+    await fetch(`${base}/api/stock/products/${prodId}/add`, {
+      method: 'POST',
+      headers: sarahHeaders,
+      body: JSON.stringify({ amount: 1 }),
+    });
+    await fetch(`${base}/api/stock/products/${prodId}/consume`, {
+      method: 'POST',
+      headers: sarahHeaders,
+      body: JSON.stringify({ amount: 1 }),
+    });
+    const afterStockNotifs = await fetch(`${base}/api/notifications?after_id=${startId}`, {
+      headers,
+    }).then((r) => r.json());
+    assert.equal(afterStockNotifs.notifications.length, 0);
+
+    // Sarah adds custom item to shopping list -> Admin receives notification, Sarah does NOT
+    await fetch(`${base}/api/objects/shopping_list`, {
+      method: 'POST',
+      headers: sarahHeaders,
+      body: JSON.stringify({ note: 'Paper Towels', amount: 2, shopping_list_id: 1, done: 0 }),
+    });
+    const adminNotifs = await fetch(`${base}/api/notifications?after_id=${startId}`, {
+      headers,
+    }).then((r) => r.json());
+    assert.equal(adminNotifs.notifications.length, 1);
+    assert.equal(adminNotifs.notifications[0].body, 'Sarah added Paper Towels to shopping list');
+
+    const sarahNotifs = await fetch(`${base}/api/notifications?after_id=${startId}`, {
+      headers: sarahHeaders,
+    }).then((r) => r.json());
+    assert.equal(sarahNotifs.notifications.length, 0);
+
+    console.log('ALL SERVER v1.4.0 TESTS PASSED!');
     console.log('\nSample compact MCP inventory_summary output:\n' + summaryText);
     console.log('\nSample compact MCP search_inventory output:\n' + searchText);
   } finally {

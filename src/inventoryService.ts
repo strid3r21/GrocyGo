@@ -1210,11 +1210,67 @@ export class InventoryService {
           note: 'Auto-added low stock',
           userId,
         });
+        this.recordShoppingListNotification(userId ?? null, missing.name);
         added++;
       }
     }
 
     return { added };
+  }
+
+  recordShoppingListNotification(actorUserId: number | null, itemName: string) {
+    const cleanItem = itemName.trim() || 'an item';
+    let actorName = 'Someone';
+    if (actorUserId) {
+      const u = this.db
+        .prepare('SELECT display_name, username FROM users WHERE id = ?')
+        .get(actorUserId) as { display_name: string; username: string } | undefined;
+      if (u) actorName = u.display_name || u.username;
+    }
+
+    const title = 'Shopping List';
+    const body = `${actorName} added ${cleanItem} to shopping list`;
+
+    this.db
+      .prepare(
+        `INSERT INTO notifications (type, actor_user_id, actor_name, item_name, title, body)
+         VALUES ('shopping_add', ?, ?, ?, ?, ?)`
+      )
+      .run(actorUserId, actorName, cleanItem, title, body);
+
+    // Keep notifications table compact (last 500 events)
+    this.db.exec(
+      'DELETE FROM notifications WHERE id NOT IN (SELECT id FROM notifications ORDER BY id DESC LIMIT 500)'
+    );
+
+    // Optional self-hosted ntfy webhook push if NTFY_TOPIC_URL is configured
+    const ntfyUrl = process.env.NTFY_TOPIC_URL?.trim();
+    if (ntfyUrl) {
+      fetch(ntfyUrl, {
+        method: 'POST',
+        headers: { Title: title, Tags: 'shopping_cart' },
+        body,
+      }).catch(() => {});
+    }
+  }
+
+  getNotificationsForUser(userId: number, afterId = 0, limit = 30) {
+    const latestRow = this.db
+      .prepare('SELECT COALESCE(MAX(id), 0) AS max_id FROM notifications')
+      .get() as { max_id: number };
+    const latestId = Number(latestRow?.max_id || 0);
+
+    const items = this.db
+      .prepare(
+        `SELECT id, type, actor_user_id, actor_name, item_name, title, body, created_at
+         FROM notifications
+         WHERE id > ? AND (actor_user_id IS NULL OR actor_user_id != ?)
+         ORDER BY id ASC
+         LIMIT ?`
+      )
+      .all(afterId, userId, Math.min(100, Math.max(1, limit)));
+
+    return { latest_id: latestId, notifications: items };
   }
 
   clearShoppingList(listId = 1, doneOnly = false): { deleted: number } {
