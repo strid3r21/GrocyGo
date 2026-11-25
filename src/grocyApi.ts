@@ -1,8 +1,8 @@
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import QRCode from 'qrcode';
+import { generateApiKey } from './auth';
 import { DbContext } from './db';
 import { importFromGrocyApi, importFromGrocySqliteBuffer } from './grocyImport';
 import { InventoryService } from './inventoryService';
@@ -52,8 +52,18 @@ const TABLE_COLUMNS: Record<string, string[]> = {
   ],
   product_barcodes: ['product_id', 'barcode', 'qu_id', 'amount', 'shopping_location_id', 'note'],
   shopping_lists: ['name', 'description'],
-  shopping_list: ['product_id', 'note', 'amount', 'shopping_list_id', 'done', 'qu_id'],
-  api_keys: ['api_key', 'description'],
+  shopping_list: [
+    'product_id',
+    'note',
+    'amount',
+    'shopping_list_id',
+    'done',
+    'qu_id',
+    'added_by_user_id',
+    'completed_by_user_id',
+    'completed_at',
+  ],
+  api_keys: ['api_key', 'description', 'user_id'],
 };
 
 function sendJson(res: http.ServerResponse, status: number, payload: unknown) {
@@ -71,7 +81,10 @@ function sendError(res: http.ServerResponse, status: number, message: string) {
   sendJson(res, status, { error_message: message });
 }
 
-function readBodyBuffer(req: http.IncomingMessage, maxBytes = MAX_PHOTO_BYTES + 256 * 1024): Promise<Buffer> {
+function readBodyBuffer(
+  req: http.IncomingMessage,
+  maxBytes = MAX_PHOTO_BYTES + 256 * 1024
+): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let total = 0;
@@ -150,7 +163,7 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
     }
 
     try {
-      // Public routes: Web UI & Health check
+      // Public routes: Web UI, Health check, and Username/Password Login
       if (method === 'GET' && (pathname === '/' || pathname === '/index.html')) {
         const html = renderWebUiHtml();
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
@@ -159,14 +172,111 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
       }
 
       if (method === 'GET' && pathname === '/api/health') {
-        sendJson(res, 200, { ok: true, service: 'grocygo-server', version: '1.1.0' });
+        sendJson(res, 200, { ok: true, service: 'grocygo-server', version: '1.2.0' });
         return;
       }
 
-      // Authenticate all /api/* and /mcp* routes
+      if (method === 'POST' && pathname === '/api/auth/login') {
+        const body = await readJsonBody(req);
+        try {
+          const result = service.loginWithPassword(
+            String(body.username || ''),
+            String(body.password || ''),
+            body.device_name ? String(body.device_name) : undefined
+          );
+          sendJson(res, 200, result);
+        } catch (err: any) {
+          sendError(res, 401, err?.message || 'Invalid credentials');
+        }
+        return;
+      }
+
+      // Authenticate all other /api/* and /mcp* routes
       const apiKey = extractApiKey(req, url);
-      if (!service.validateApiKey(apiKey)) {
+      const currentUser = service.authenticateApiKey(apiKey);
+      if (!currentUser) {
         sendError(res, 401, 'Unauthorized: missing or invalid GROCY-API-KEY');
+        return;
+      }
+
+      // ─── Auth Profile & Password ──────────────────────────────
+      if (method === 'GET' && pathname === '/api/auth/me') {
+        sendJson(res, 200, currentUser);
+        return;
+      }
+
+      if (method === 'POST' && pathname === '/api/auth/change-password') {
+        const body = await readJsonBody(req);
+        service.changeOwnPassword(
+          currentUser.id,
+          String(body.current_password || ''),
+          String(body.new_password || '')
+        );
+        sendJson(res, 200, { ok: true });
+        return;
+      }
+
+      // ─── Household Users Management ───────────────────────────
+      if (method === 'GET' && pathname === '/api/users') {
+        if (currentUser.role === 'admin') {
+          sendJson(res, 200, service.listUsers());
+        } else {
+          // Non-admins get basic household member list without API keys
+          const basic = service.listUsers().map((u) => ({
+            id: u.id,
+            username: u.username,
+            display_name: u.display_name,
+            role: u.role,
+            active: u.active,
+          }));
+          sendJson(res, 200, basic);
+        }
+        return;
+      }
+
+      if (method === 'POST' && pathname === '/api/users') {
+        if (currentUser.role !== 'admin') {
+          sendError(res, 403, 'Admin permission required to add users');
+          return;
+        }
+        const body = await readJsonBody(req);
+        const created = service.createUser(body);
+        sendJson(res, 200, created);
+        return;
+      }
+
+      const userIdMatch = pathname.match(/^\/api\/users\/(\d+)$/);
+      if (userIdMatch) {
+        if (currentUser.role !== 'admin') {
+          sendError(res, 403, 'Admin permission required to manage users');
+          return;
+        }
+        const targetId = Number(userIdMatch[1]);
+        if (method === 'PUT') {
+          const body = await readJsonBody(req);
+          service.updateUser(targetId, body);
+          res.writeHead(204, { 'Access-Control-Allow-Origin': '*' });
+          res.end();
+          return;
+        }
+        if (method === 'DELETE') {
+          service.deleteUser(targetId, currentUser.id);
+          res.writeHead(204, { 'Access-Control-Allow-Origin': '*' });
+          res.end();
+          return;
+        }
+      }
+
+      // ─── Activity Feed (Who did what & when) ──────────────────
+      if (method === 'GET' && pathname === '/api/activity') {
+        const limit = Number(url.searchParams.get('limit') || 50);
+        const productId = url.searchParams.get('product_id')
+          ? Number(url.searchParams.get('product_id'))
+          : undefined;
+        const userId = url.searchParams.get('user_id')
+          ? Number(url.searchParams.get('user_id'))
+          : undefined;
+        sendJson(res, 200, service.getActivity({ limit, productId, userId }));
         return;
       }
 
@@ -200,18 +310,21 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
       if (method === 'GET' && pathname === '/api/system/info') {
         sendJson(res, 200, {
           grocy_version: {
-            Version: 'GrocyGo-Server 1.1.0',
+            Version: 'GrocyGo-Server 1.2.0',
             ReleaseDate: '2026-11-25',
           },
           php_version: `Node ${process.version}`,
           sqlite_version: 'SQLite3 (WAL)',
           os: process.platform,
+          current_user: currentUser,
           features: {
             food_inventory: true,
             shopping_list: true,
             storage_photos: true,
             grocy_import: true,
             qr_codes: true,
+            multi_user: true,
+            activity_log: true,
             mcp_endpoint: '/mcp',
           },
         });
@@ -242,6 +355,10 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
 
       // ─── Import from Original Grocy (Live API or SQLite DB) ───
       if (method === 'POST' && pathname === '/api/import/grocy-api') {
+        if (currentUser.role !== 'admin') {
+          sendError(res, 403, 'Admin permission required to import data');
+          return;
+        }
         const body = await readJsonBody(req);
         const report = await importFromGrocyApi(ctx, {
           serverUrl: String(body.server_url || body.serverUrl || ''),
@@ -254,8 +371,11 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
       }
 
       if (method === 'POST' && pathname === '/api/import/grocy-db') {
+        if (currentUser.role !== 'admin') {
+          sendError(res, 403, 'Admin permission required to import data');
+          return;
+        }
         const clearExisting = url.searchParams.get('clear_existing') === '1';
-        // Allow up to 60 MB SQLite file upload
         const dbBuf = await readBodyBuffer(req, 60 * 1024 * 1024);
         const report = await importFromGrocySqliteBuffer(ctx, dbBuf, { clearExisting });
         sendJson(res, 200, report);
@@ -369,11 +489,10 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
         return;
       }
 
-      // Shopping list stock helpers
       if (method === 'POST' && pathname === '/api/stock/shoppinglist/add-missing-products') {
         const body = await readJsonBody(req);
         const listId = Number(body.list_id || 1);
-        sendJson(res, 200, service.addMissingProductsToShoppingList(listId));
+        sendJson(res, 200, service.addMissingProductsToShoppingList(listId, currentUser.id));
         return;
       }
 
@@ -388,11 +507,10 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
       if (method === 'POST' && pathname === '/api/stock/shoppinglist/purchase-done') {
         const body = await readJsonBody(req);
         const listId = Number(body.list_id || 1);
-        sendJson(res, 200, service.purchaseDoneShoppingItems(listId));
+        sendJson(res, 200, service.purchaseDoneShoppingItems(listId, currentUser.id));
         return;
       }
 
-      // Barcode lookup
       const barcodeMatch = pathname.match(/^\/api\/stock\/products\/by-barcode\/(.+)$/);
       if (method === 'GET' && barcodeMatch) {
         const barcode = decodeURIComponent(barcodeMatch[1]);
@@ -405,7 +523,6 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
         return;
       }
 
-      // Per-product stock endpoints
       const prodStockMatch = pathname.match(
         /^\/api\/stock\/products\/(\d+)(?:\/(entries|locations|add|consume|open|inventory|transfer))?$/
       );
@@ -435,32 +552,31 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
 
         if (sub === 'add' && method === 'POST') {
           const body = await readJsonBody(req);
-          const created = service.purchaseProduct(productId, body);
-          sendJson(res, 200, created);
+          sendJson(res, 200, service.purchaseProduct(productId, body, currentUser.id));
           return;
         }
 
         if (sub === 'consume' && method === 'POST') {
           const body = await readJsonBody(req);
-          sendJson(res, 200, service.consumeProduct(productId, body));
+          sendJson(res, 200, service.consumeProduct(productId, body, currentUser.id));
           return;
         }
 
         if (sub === 'open' && method === 'POST') {
           const body = await readJsonBody(req);
-          sendJson(res, 200, service.openProduct(productId, body.amount ?? 1));
+          sendJson(res, 200, service.openProduct(productId, body.amount ?? 1, currentUser.id));
           return;
         }
 
         if (sub === 'inventory' && method === 'POST') {
           const body = await readJsonBody(req);
-          sendJson(res, 200, service.inventoryProduct(productId, body));
+          sendJson(res, 200, service.inventoryProduct(productId, body, currentUser.id));
           return;
         }
 
         if (sub === 'transfer' && method === 'POST') {
           const body = await readJsonBody(req);
-          sendJson(res, 200, service.transferProduct(productId, body));
+          sendJson(res, 200, service.transferProduct(productId, body, currentUser.id));
           return;
         }
       }
@@ -482,6 +598,25 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
             sendJson(res, 200, service.getShoppingListItems(listId ? Number(listId) : undefined));
             return;
           }
+          if (table === 'api_keys') {
+            const rows =
+              currentUser.role === 'admin'
+                ? ctx.db
+                    .prepare(
+                      `SELECT k.*, u.username, u.display_name AS user_display_name
+                       FROM api_keys k LEFT JOIN users u ON u.id = k.user_id ORDER BY k.id ASC`
+                    )
+                    .all()
+                : ctx.db
+                    .prepare(
+                      `SELECT k.*, u.username, u.display_name AS user_display_name
+                       FROM api_keys k LEFT JOIN users u ON u.id = k.user_id
+                       WHERE k.user_id = ? ORDER BY k.id ASC`
+                    )
+                    .all(currentUser.id);
+            sendJson(res, 200, rows);
+            return;
+          }
           const rows = ctx.db.prepare(`SELECT * FROM ${table} ORDER BY id ASC`).all();
           sendJson(res, 200, rows);
           return;
@@ -499,8 +634,15 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
 
         if (method === 'POST' && idParam === null) {
           const body = await readJsonBody(req);
-          if (table === 'api_keys' && !body.api_key) {
-            body.api_key = `gg_${crypto.randomBytes(24).toString('base64url')}`;
+          if (table === 'api_keys') {
+            if (!body.api_key) body.api_key = generateApiKey();
+            body.user_id =
+              currentUser.role === 'admin' && body.user_id
+                ? Number(body.user_id)
+                : currentUser.id;
+          }
+          if (table === 'shopping_list') {
+            body.added_by_user_id = currentUser.id;
           }
 
           const allowed = TABLE_COLUMNS[table] || [];
@@ -516,6 +658,22 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
             .prepare(`INSERT INTO ${table} (${keys.join(', ')}) VALUES (${placeholders})`)
             .run(...values);
 
+          if (table === 'shopping_list') {
+            const prod = body.product_id
+              ? (ctx.db
+                  .prepare('SELECT name FROM products WHERE id = ?')
+                  .get(Number(body.product_id)) as { name: string } | undefined)
+              : undefined;
+            service.logActivity({
+              productId: body.product_id ? Number(body.product_id) : null,
+              itemLabel: prod?.name || String(body.note || 'Item'),
+              amount: Number(body.amount || 1),
+              transactionType: 'shopping_add',
+              note: prod && body.note ? String(body.note) : '',
+              userId: currentUser.id,
+            });
+          }
+
           const response: Record<string, unknown> = {
             created_object_id: Number(info.lastInsertRowid),
           };
@@ -526,6 +684,13 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
 
         if (method === 'PUT' && idParam !== null) {
           const body = await readJsonBody(req);
+
+          if (table === 'shopping_list' && body.done !== undefined) {
+            const isDone = Boolean(body.done);
+            body.completed_by_user_id = isDone ? currentUser.id : null;
+            body.completed_at = isDone ? new Date().toISOString() : null;
+          }
+
           const allowed = TABLE_COLUMNS[table] || [];
           const keys = allowed.filter((k) => body[k] !== undefined);
           if (keys.length === 0) {
@@ -542,6 +707,25 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
             sendError(res, 404, `${table} #${idParam} not found`);
             return;
           }
+
+          if (table === 'shopping_list' && body.done) {
+            const item = ctx.db
+              .prepare(
+                `SELECT sl.product_id, sl.amount, sl.note, p.name AS product_name
+                 FROM shopping_list sl LEFT JOIN products p ON p.id = sl.product_id WHERE sl.id = ?`
+              )
+              .get(idParam) as any;
+            if (item) {
+              service.logActivity({
+                productId: item.product_id || null,
+                itemLabel: item.product_name || item.note || 'Item',
+                amount: Number(item.amount || 1),
+                transactionType: 'shopping_done',
+                userId: currentUser.id,
+              });
+            }
+          }
+
           res.writeHead(204, { 'Access-Control-Allow-Origin': '*' });
           res.end();
           return;
@@ -549,6 +733,17 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
 
         if (method === 'DELETE' && idParam !== null) {
           if (table === 'api_keys') {
+            const targetKey = ctx.db
+              .prepare('SELECT user_id FROM api_keys WHERE id = ?')
+              .get(idParam) as { user_id: number } | undefined;
+            if (!targetKey) {
+              sendError(res, 404, 'API key not found');
+              return;
+            }
+            if (currentUser.role !== 'admin' && targetKey.user_id !== currentUser.id) {
+              sendError(res, 403, 'Cannot delete another user’s API key');
+              return;
+            }
             const count = (
               ctx.db.prepare('SELECT COUNT(*) AS c FROM api_keys').get() as { c: number }
             ).c;
@@ -572,7 +767,7 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
     } catch (err: any) {
       const msg = err?.message || 'Internal server error';
       const isClientErr =
-        /UNIQUE constraint|FOREIGN KEY constraint|NOT NULL constraint|not found|Invalid|Missing|must be|greater than|No stock|No unopened/i.test(
+        /UNIQUE constraint|FOREIGN KEY constraint|NOT NULL constraint|not found|Invalid|Missing|must be|greater than|No stock|No unopened|Cannot delete|Cannot demote|incorrect|at least/i.test(
           msg
         );
       sendError(res, isClientErr ? 400 : 500, msg);

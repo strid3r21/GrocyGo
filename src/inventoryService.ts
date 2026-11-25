@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { AuthUser, generateApiKey, hashPassword, verifyPassword } from './auth';
 import { DbContext } from './db';
 import { deletePhotoIfUnreferenced } from './photos';
 
@@ -47,14 +48,259 @@ export class InventoryService {
     );
   }
 
-  validateApiKey(key: string | null | undefined): boolean {
-    if (!key) return false;
+  // ─── Auth & Users ─────────────────────────────────────────────
+  authenticateApiKey(key: string | null | undefined): AuthUser | null {
+    if (!key) return null;
     const row = this.db
-      .prepare('SELECT id FROM api_keys WHERE api_key = ? LIMIT 1')
-      .get(key.trim());
-    return Boolean(row);
+      .prepare(
+        `SELECT u.id, u.username, u.display_name, u.role, u.active
+         FROM api_keys k
+         INNER JOIN users u ON u.id = k.user_id
+         WHERE k.api_key = ? AND u.active = 1
+         LIMIT 1`
+      )
+      .get(key.trim()) as AuthUser | undefined;
+    return row || null;
   }
 
+  loginWithPassword(
+    username: string,
+    password: string,
+    deviceName?: string
+  ): { user: AuthUser; api_key: string } {
+    const cleanUser = username.trim();
+    if (!cleanUser || !password) {
+      throw new Error('Username and password are required');
+    }
+    const row = this.db
+      .prepare('SELECT * FROM users WHERE LOWER(username) = LOWER(?) LIMIT 1')
+      .get(cleanUser) as any;
+
+    if (!row || !row.active || !verifyPassword(password, row.password_hash)) {
+      throw new Error('Invalid username or password');
+    }
+
+    // Reuse user's primary API key if they have one, or create one
+    let keyRow = this.db
+      .prepare('SELECT api_key FROM api_keys WHERE user_id = ? ORDER BY id ASC LIMIT 1')
+      .get(row.id) as { api_key: string } | undefined;
+
+    if (!keyRow) {
+      const newKey = generateApiKey();
+      this.db
+        .prepare('INSERT INTO api_keys (api_key, description, user_id) VALUES (?, ?, ?)')
+        .run(newKey, deviceName?.trim() || `${row.display_name} Login`, row.id);
+      keyRow = { api_key: newKey };
+    }
+
+    return {
+      user: {
+        id: row.id,
+        username: row.username,
+        display_name: row.display_name,
+        role: row.role,
+        active: row.active,
+      },
+      api_key: keyRow.api_key,
+    };
+  }
+
+  listUsers(): any[] {
+    return this.db
+      .prepare(
+        `SELECT u.id, u.username, u.display_name, u.role, u.active, u.created_at,
+                (SELECT api_key FROM api_keys k WHERE k.user_id = u.id ORDER BY k.id ASC LIMIT 1) AS primary_api_key
+         FROM users u
+         ORDER BY u.id ASC`
+      )
+      .all();
+  }
+
+  createUser(payload: {
+    username: string;
+    display_name?: string;
+    password: string;
+    role?: string;
+  }) {
+    const username = payload.username?.trim();
+    const displayName = (payload.display_name || username || '').trim();
+    const password = payload.password || '';
+    const role = payload.role === 'admin' ? 'admin' : 'member';
+
+    if (!username || username.length < 2) {
+      throw new Error('Username must be at least 2 characters');
+    }
+    if (!/^[a-zA-Z0-9._-]+$/.test(username)) {
+      throw new Error('Username may only contain letters, numbers, dots, underscores, and hyphens');
+    }
+    if (password.length < 4) {
+      throw new Error('Password must be at least 4 characters');
+    }
+
+    const info = this.db
+      .prepare(
+        'INSERT INTO users (username, display_name, password_hash, role, active) VALUES (?, ?, ?, ?, 1)'
+      )
+      .run(username, displayName, hashPassword(password), role);
+    const userId = Number(info.lastInsertRowid);
+
+    // Create a starter personal API key for QR onboarding
+    const personalKey = generateApiKey();
+    this.db
+      .prepare('INSERT INTO api_keys (api_key, description, user_id) VALUES (?, ?, ?)')
+      .run(personalKey, `${displayName} Personal Key`, userId);
+
+    return {
+      id: userId,
+      username,
+      display_name: displayName,
+      role,
+      active: 1,
+      api_key: personalKey,
+    };
+  }
+
+  updateUser(
+    id: number,
+    payload: { display_name?: string; password?: string; role?: string; active?: number | boolean }
+  ) {
+    const existing = this.db.prepare('SELECT * FROM users WHERE id = ?').get(id) as any;
+    if (!existing) throw new Error(`User #${id} not found`);
+
+    const nextRole =
+      payload.role === 'admin' || payload.role === 'member' ? payload.role : existing.role;
+    const nextActive =
+      payload.active !== undefined ? (payload.active ? 1 : 0) : existing.active;
+
+    if (existing.role === 'admin' && (nextRole !== 'admin' || nextActive === 0)) {
+      const otherAdmins = (
+        this.db
+          .prepare("SELECT COUNT(*) AS c FROM users WHERE role = 'admin' AND active = 1 AND id != ?")
+          .get(id) as { c: number }
+      ).c;
+      if (otherAdmins === 0) {
+        throw new Error('Cannot demote or disable the last active admin');
+      }
+    }
+
+    const nextName = payload.display_name?.trim() || existing.display_name;
+    const nextHash =
+      payload.password && payload.password.length >= 4
+        ? hashPassword(payload.password)
+        : existing.password_hash;
+
+    this.db
+      .prepare(
+        'UPDATE users SET display_name = ?, password_hash = ?, role = ?, active = ? WHERE id = ?'
+      )
+      .run(nextName, nextHash, nextRole, nextActive, id);
+  }
+
+  changeOwnPassword(userId: number, currentPassword: string, newPassword: string) {
+    const existing = this.db.prepare('SELECT * FROM users WHERE id = ?').get(userId) as any;
+    if (!existing) throw new Error('User not found');
+    if (!verifyPassword(currentPassword, existing.password_hash)) {
+      throw new Error('Current password is incorrect');
+    }
+    if (!newPassword || newPassword.length < 4) {
+      throw new Error('New password must be at least 4 characters');
+    }
+    this.db
+      .prepare('UPDATE users SET password_hash = ? WHERE id = ?')
+      .run(hashPassword(newPassword), userId);
+  }
+
+  deleteUser(id: number, actingUserId: number) {
+    if (id === actingUserId) {
+      throw new Error('Cannot delete your own currently signed-in account');
+    }
+    const existing = this.db.prepare('SELECT * FROM users WHERE id = ?').get(id) as any;
+    if (!existing) throw new Error(`User #${id} not found`);
+    if (existing.role === 'admin') {
+      const otherAdmins = (
+        this.db
+          .prepare("SELECT COUNT(*) AS c FROM users WHERE role = 'admin' AND active = 1 AND id != ?")
+          .get(id) as { c: number }
+      ).c;
+      if (otherAdmins === 0) throw new Error('Cannot delete the last active admin');
+    }
+    this.db.prepare('DELETE FROM users WHERE id = ?').run(id);
+  }
+
+  logActivity(params: {
+    productId?: number | null;
+    itemLabel?: string;
+    amount?: number;
+    transactionType: string;
+    locationId?: number | null;
+    spoiled?: boolean;
+    note?: string;
+    userId?: number | null;
+  }) {
+    this.db
+      .prepare(
+        `INSERT INTO stock_log (
+          product_id, item_label, amount, transaction_type, location_id, spoiled, note, user_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        params.productId ?? null,
+        params.itemLabel || '',
+        params.amount ?? 0,
+        params.transactionType,
+        params.locationId ?? null,
+        params.spoiled ? 1 : 0,
+        params.note || '',
+        params.userId ?? null
+      );
+  }
+
+  getActivity(options: { limit?: number; productId?: number; userId?: number } = {}): any[] {
+    const limit = Math.min(200, Math.max(1, options.limit || 50));
+    const where: string[] = [];
+    const args: any[] = [];
+    if (options.productId) {
+      where.push('sl.product_id = ?');
+      args.push(options.productId);
+    }
+    if (options.userId) {
+      where.push('sl.user_id = ?');
+      args.push(options.userId);
+    }
+    const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
+    args.push(limit);
+
+    return this.db
+      .prepare(
+        `SELECT
+          sl.id,
+          sl.product_id,
+          COALESCE(p.name, NULLIF(sl.item_label, ''), 'Item') AS product_name,
+          sl.amount,
+          sl.transaction_type,
+          sl.location_id,
+          l.name AS location_name,
+          sl.spoiled,
+          sl.note,
+          sl.user_id,
+          u.username AS username,
+          COALESCE(u.display_name, u.username, 'System') AS user_display_name,
+          qu.name AS qu_name,
+          qu.name_plural AS qu_name_plural,
+          sl.row_created_timestamp AS timestamp
+        FROM stock_log sl
+        LEFT JOIN products p ON p.id = sl.product_id
+        LEFT JOIN locations l ON l.id = sl.location_id
+        LEFT JOIN users u ON u.id = sl.user_id
+        LEFT JOIN quantity_units qu ON qu.id = p.qu_id_stock
+        ${whereSql}
+        ORDER BY sl.id DESC
+        LIMIT ?`
+      )
+      .all(...args);
+  }
+
+  // ─── Stock & Inventory ────────────────────────────────────────
   getStockOverview(): any[] {
     const rows = this.db
       .prepare(
@@ -253,9 +499,11 @@ export class InventoryService {
     return this.db
       .prepare(
         `
-        SELECT s.*, l.name AS location_name, l.is_freezer AS location_is_freezer
+        SELECT s.*, l.name AS location_name, l.is_freezer AS location_is_freezer,
+               u.display_name AS added_by_name
         FROM stock s
         LEFT JOIN locations l ON l.id = s.location_id
+        LEFT JOIN users u ON u.id = s.added_by_user_id
         WHERE s.product_id = ? AND s.amount > 0
         ORDER BY s.open DESC, COALESCE(NULLIF(s.best_before_date, ''), '2999-12-31') ASC, s.id DESC
       `
@@ -293,7 +541,8 @@ export class InventoryService {
       shopping_location_id?: number;
       note?: string;
       photo_file_name?: string;
-    }
+    },
+    userId?: number | null
   ) {
     const product = this.db
       .prepare('SELECT * FROM products WHERE id = ?')
@@ -325,8 +574,8 @@ export class InventoryService {
         `
         INSERT INTO stock (
           product_id, amount, best_before_date, purchased_date, stock_id,
-          price, open, location_id, shopping_location_id, note, photo_file_name
-        ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
+          price, open, location_id, shopping_location_id, note, photo_file_name, added_by_user_id
+        ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
       `
       )
       .run(
@@ -339,22 +588,25 @@ export class InventoryService {
         locationId,
         payload.shopping_location_id ?? product.shopping_location_id ?? null,
         payload.note?.trim() || '',
-        photoFileName
+        photoFileName,
+        userId ?? null
       );
 
-    // Keep product's default storage/shelf photo updated with latest shelf snapshot
     if (photoFileName) {
       this.db
         .prepare('UPDATE products SET storage_photo_file_name = ? WHERE id = ?')
         .run(photoFileName, productId);
     }
 
-    this.db
-      .prepare(
-        `INSERT INTO stock_log (product_id, amount, transaction_type, location_id, note)
-         VALUES (?, ?, 'purchase', ?, ?)`
-      )
-      .run(productId, amount, locationId, payload.note?.trim() || '');
+    this.logActivity({
+      productId,
+      itemLabel: product.name,
+      amount,
+      transactionType: 'purchase',
+      locationId,
+      note: payload.note?.trim() || '',
+      userId,
+    });
 
     return {
       id: Number(info.lastInsertRowid),
@@ -374,8 +626,12 @@ export class InventoryService {
       spoiled?: boolean;
       location_id?: number;
       stock_entry_id?: number;
-    }
+    },
+    userId?: number | null
   ) {
+    const product = this.db.prepare('SELECT name FROM products WHERE id = ?').get(productId) as
+      | { name: string }
+      | undefined;
     const amountRequested = Number(payload.amount);
     if (!Number.isFinite(amountRequested) || amountRequested <= 0) {
       throw new Error('Consume amount must be greater than 0');
@@ -425,17 +681,15 @@ export class InventoryService {
       }
     }
 
-    this.db
-      .prepare(
-        `INSERT INTO stock_log (product_id, amount, transaction_type, location_id, spoiled)
-         VALUES (?, ?, 'consume', ?, ?)`
-      )
-      .run(
-        productId,
-        -consumedTotal,
-        payload.location_id ?? entries[0]?.location_id ?? null,
-        payload.spoiled ? 1 : 0
-      );
+    this.logActivity({
+      productId,
+      itemLabel: product?.name || '',
+      amount: -consumedTotal,
+      transactionType: payload.spoiled ? 'spoiled' : 'consume',
+      locationId: payload.location_id ?? entries[0]?.location_id ?? null,
+      spoiled: Boolean(payload.spoiled),
+      userId,
+    });
 
     for (const ph of removedPhotos) {
       this.cleanupPhotoIfUnused(ph);
@@ -444,7 +698,10 @@ export class InventoryService {
     return { product_id: productId, consumed: consumedTotal };
   }
 
-  openProduct(productId: number, amount = 1) {
+  openProduct(productId: number, amount = 1, userId?: number | null) {
+    const product = this.db.prepare('SELECT name FROM products WHERE id = ?').get(productId) as
+      | { name: string }
+      | undefined;
     const qty = Number(amount);
     if (!Number.isFinite(qty) || qty <= 0) throw new Error('Amount must be greater than 0');
 
@@ -477,8 +734,8 @@ export class InventoryService {
           .prepare(
             `INSERT INTO stock (
               product_id, amount, best_before_date, purchased_date, stock_id,
-              price, open, opened_date, location_id, shopping_location_id, note, photo_file_name
-            ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`
+              price, open, opened_date, location_id, shopping_location_id, note, photo_file_name, added_by_user_id
+            ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)`
           )
           .run(
             productId,
@@ -491,13 +748,24 @@ export class InventoryService {
             entry.location_id,
             entry.shopping_location_id,
             entry.note,
-            entry.photo_file_name
+            entry.photo_file_name,
+            entry.added_by_user_id
           );
         remaining = 0;
       }
     }
 
-    return { product_id: productId, opened: qty - remaining };
+    const opened = qty - remaining;
+    this.logActivity({
+      productId,
+      itemLabel: product?.name || '',
+      amount: opened,
+      transactionType: 'open',
+      locationId: unopened[0]?.location_id ?? null,
+      userId,
+    });
+
+    return { product_id: productId, opened };
   }
 
   inventoryProduct(
@@ -509,7 +777,8 @@ export class InventoryService {
       price?: number;
       note?: string;
       photo_file_name?: string;
-    }
+    },
+    userId?: number | null
   ) {
     const newAmount = Number(payload.new_amount);
     if (!Number.isFinite(newAmount) || newAmount < 0) {
@@ -524,19 +793,27 @@ export class InventoryService {
 
     const delta = Math.round((newAmount - current) * 1000) / 1000;
     if (delta > 0) {
-      return this.purchaseProduct(productId, {
-        amount: delta,
-        best_before_date: payload.best_before_date,
-        location_id: payload.location_id,
-        price: payload.price,
-        note: payload.note || 'Inventory correction',
-        photo_file_name: payload.photo_file_name,
-      });
+      return this.purchaseProduct(
+        productId,
+        {
+          amount: delta,
+          best_before_date: payload.best_before_date,
+          location_id: payload.location_id,
+          price: payload.price,
+          note: payload.note || 'Inventory correction',
+          photo_file_name: payload.photo_file_name,
+        },
+        userId
+      );
     } else if (delta < 0) {
-      return this.consumeProduct(productId, {
-        amount: Math.abs(delta),
-        location_id: payload.location_id,
-      });
+      return this.consumeProduct(
+        productId,
+        {
+          amount: Math.abs(delta),
+          location_id: payload.location_id,
+        },
+        userId
+      );
     }
     return { product_id: productId, unchanged: true, amount: current };
   }
@@ -548,8 +825,12 @@ export class InventoryService {
       location_id_from: number;
       location_id_to: number;
       photo_file_name?: string;
-    }
+    },
+    userId?: number | null
   ) {
+    const product = this.db.prepare('SELECT name FROM products WHERE id = ?').get(productId) as
+      | { name: string }
+      | undefined;
     const qty = Number(payload.amount);
     if (!Number.isFinite(qty) || qty <= 0) throw new Error('Transfer amount must be > 0');
     if (payload.location_id_from === payload.location_id_to) {
@@ -588,8 +869,8 @@ export class InventoryService {
           .prepare(
             `INSERT INTO stock (
               product_id, amount, best_before_date, purchased_date, stock_id,
-              price, open, opened_date, location_id, shopping_location_id, note, photo_file_name
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+              price, open, opened_date, location_id, shopping_location_id, note, photo_file_name, added_by_user_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
           )
           .run(
             productId,
@@ -603,23 +884,29 @@ export class InventoryService {
             payload.location_id_to,
             entry.shopping_location_id,
             entry.note,
-            nextPhoto
+            nextPhoto,
+            userId ?? entry.added_by_user_id
           );
         remaining = 0;
       }
     }
 
-    this.db
-      .prepare(
-        `INSERT INTO stock_log (product_id, amount, transaction_type, location_id, note)
-         VALUES (?, ?, 'transfer', ?, ?)`
-      )
-      .run(
-        productId,
-        moved,
-        payload.location_id_to,
-        `From location #${payload.location_id_from} to #${payload.location_id_to}`
-      );
+    const fromLoc = this.db
+      .prepare('SELECT name FROM locations WHERE id = ?')
+      .get(payload.location_id_from) as { name: string } | undefined;
+    const toLoc = this.db
+      .prepare('SELECT name FROM locations WHERE id = ?')
+      .get(payload.location_id_to) as { name: string } | undefined;
+
+    this.logActivity({
+      productId,
+      itemLabel: product?.name || '',
+      amount: moved,
+      transactionType: 'transfer',
+      locationId: payload.location_id_to,
+      note: `${fromLoc?.name || `#${payload.location_id_from}`} → ${toLoc?.name || `#${payload.location_id_to}`}`,
+      userId,
+    });
 
     return {
       product_id: productId,
@@ -639,7 +926,6 @@ export class InventoryService {
       .prepare('UPDATE stock SET photo_file_name = ? WHERE id = ?')
       .run(fileName, entryId);
 
-    // Update product's default shelf photo too
     this.db
       .prepare('UPDATE products SET storage_photo_file_name = ? WHERE id = ?')
       .run(fileName, existing.product_id);
@@ -685,23 +971,31 @@ export class InventoryService {
   getShoppingListItems(listId?: number): any[] {
     const sql = listId
       ? `SELECT sl.*, p.name AS product_name, p.picture_file_name AS product_photo,
-                qu.name AS qu_name, qu.name_plural AS qu_name_plural
+                qu.name AS qu_name, qu.name_plural AS qu_name_plural,
+                ua.display_name AS added_by_name,
+                uc.display_name AS completed_by_name
          FROM shopping_list sl
          LEFT JOIN products p ON p.id = sl.product_id
          LEFT JOIN quantity_units qu ON qu.id = COALESCE(sl.qu_id, p.qu_id_purchase)
+         LEFT JOIN users ua ON ua.id = sl.added_by_user_id
+         LEFT JOIN users uc ON uc.id = sl.completed_by_user_id
          WHERE sl.shopping_list_id = ?
          ORDER BY sl.done ASC, sl.id DESC`
       : `SELECT sl.*, p.name AS product_name, p.picture_file_name AS product_photo,
-                qu.name AS qu_name, qu.name_plural AS qu_name_plural
+                qu.name AS qu_name, qu.name_plural AS qu_name_plural,
+                ua.display_name AS added_by_name,
+                uc.display_name AS completed_by_name
          FROM shopping_list sl
          LEFT JOIN products p ON p.id = sl.product_id
          LEFT JOIN quantity_units qu ON qu.id = COALESCE(sl.qu_id, p.qu_id_purchase)
+         LEFT JOIN users ua ON ua.id = sl.added_by_user_id
+         LEFT JOIN users uc ON uc.id = sl.completed_by_user_id
          ORDER BY sl.done ASC, sl.id DESC`;
 
     return listId ? this.db.prepare(sql).all(listId) : this.db.prepare(sql).all();
   }
 
-  addMissingProductsToShoppingList(listId = 1): { added: number } {
+  addMissingProductsToShoppingList(listId = 1, userId?: number | null): { added: number } {
     const volatile = this.getVolatileStock(5);
     let added = 0;
 
@@ -721,9 +1015,17 @@ export class InventoryService {
       } else {
         this.db
           .prepare(
-            'INSERT INTO shopping_list (product_id, amount, shopping_list_id, done) VALUES (?, ?, ?, 0)'
+            'INSERT INTO shopping_list (product_id, amount, shopping_list_id, done, added_by_user_id) VALUES (?, ?, ?, 0, ?)'
           )
-          .run(missing.id, missing.amount_missing, listId);
+          .run(missing.id, missing.amount_missing, listId, userId ?? null);
+        this.logActivity({
+          productId: missing.id,
+          itemLabel: missing.name,
+          amount: missing.amount_missing,
+          transactionType: 'shopping_add',
+          note: 'Auto-added low stock',
+          userId,
+        });
         added++;
       }
     }
@@ -742,20 +1044,22 @@ export class InventoryService {
     return { deleted: Number(info.changes || 0) };
   }
 
-  purchaseDoneShoppingItems(listId = 1): { purchased: number } {
+  purchaseDoneShoppingItems(listId = 1, userId?: number | null): { purchased: number } {
     const doneItems = this.db
-      .prepare(
-        'SELECT * FROM shopping_list WHERE shopping_list_id = ? AND done = 1'
-      )
+      .prepare('SELECT * FROM shopping_list WHERE shopping_list_id = ? AND done = 1')
       .all(listId) as any[];
 
     let purchased = 0;
     for (const item of doneItems) {
       if (item.product_id) {
-        this.purchaseProduct(item.product_id, {
-          amount: Number(item.amount || 1),
-          note: item.note || 'From shopping list',
-        });
+        this.purchaseProduct(
+          item.product_id,
+          {
+            amount: Number(item.amount || 1),
+            note: item.note || 'From shopping list',
+          },
+          userId
+        );
         purchased++;
       }
       this.db.prepare('DELETE FROM shopping_list WHERE id = ?').run(item.id);

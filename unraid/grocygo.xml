@@ -21,6 +21,7 @@
   <Requires/>
   <Config Name="Web UI &amp; API Port" Target="9283" Default="9283" Mode="tcp" Description="HTTP port for the GrocyGo Web UI, REST API (/api), and MCP endpoint (/mcp)." Type="Port" Display="always" Required="true" Mask="false">9283</Config>
   <Config Name="Appdata (SQLite DB &amp; Photos)" Target="/data" Default="/mnt/user/appdata/grocygo" Mode="rw" Description="Persistent storage for the SQLite database and uploaded product/shelf photos." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/grocygo</Config>
+  <Config Name="Initial Admin Password (Optional)" Target="INITIAL_ADMIN_PASSWORD" Default="" Mode="" Description="Optional password for the default 'admin' account on first start. Leave blank to auto-generate (printed in container logs)." Type="Variable" Display="always" Required="false" Mask="true"/>
   <Config Name="Initial API Key (Optional)" Target="INITIAL_API_KEY" Default="" Mode="" Description="Optional fixed API key for first-time setup. Leave blank to auto-generate one (printed in container logs on first start)." Type="Variable" Display="always" Required="false" Mask="true"/>
   <Config Name="Timezone" Target="TZ" Default="America/New_York" Mode="" Description="Timezone for best-before date calculations (e.g. America/New_York, UTC)." Type="Variable" Display="always" Required="false" Mask="false">America/New_York</Config>
 </Container>

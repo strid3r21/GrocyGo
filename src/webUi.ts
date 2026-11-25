@@ -59,14 +59,14 @@ export function renderWebUiHtml(): string {
       gap: 12px;
       flex-wrap: wrap;
     }
-    .brand { font-weight: 700; font-size: 20px; letter-spacing: -0.01em; }
-    nav { display: flex; gap: 6px; flex-wrap: wrap; }
+    .brand { font-weight: 700; font-size: 20px; letter-spacing: -0.01em; display:flex; align-items:center; gap:10px; }
+    nav { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
     button {
       background: var(--surface);
       color: var(--text);
       border: 1px solid var(--border);
       border-radius: 10px;
-      padding: 10px 15px;
+      padding: 10px 14px;
       min-height: 44px;
       font-size: 14px;
       font-weight: 600;
@@ -78,7 +78,7 @@ export function renderWebUiHtml(): string {
     button.primary:hover { opacity: 0.92; }
     button.danger { background: var(--danger-soft); color: var(--danger); border-color: transparent; }
     button.active { background: var(--primary-soft); color: var(--primary); border-color: var(--primary); }
-    main { max-width: 920px; margin: 24px auto; padding: 0 16px 56px; }
+    main { max-width: 960px; margin: 24px auto; padding: 0 16px 56px; }
     .card {
       background: var(--surface);
       border: 1px solid var(--border);
@@ -117,107 +117,94 @@ export function renderWebUiHtml(): string {
       color: var(--text-secondary);
       border-radius: 8px;
       padding: 3px 9px;
-      font-size: 13px;
+      font-size: 12px;
       font-weight: 600;
     }
     .photo-pair { display: flex; gap: 8px; flex-shrink: 0; }
-    .photo-slot {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 4px;
-      width: 68px;
-    }
-    .thumb {
-      width: 64px;
-      height: 64px;
-      border-radius: 10px;
-      object-fit: cover;
-      border: 1px solid var(--border);
-      cursor: pointer;
-    }
+    .photo-slot { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 68px; }
+    .thumb { width: 64px; height: 64px; border-radius: 10px; object-fit: cover; border: 1px solid var(--border); cursor: pointer; }
     .thumb-empty {
-      width: 64px;
-      height: 64px;
-      border-radius: 10px;
-      background: var(--muted);
-      border: 1px dashed var(--border);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      color: var(--text-muted);
-      font-size: 12px;
-      cursor: pointer;
+      width: 64px; height: 64px; border-radius: 10px; background: var(--muted);
+      border: 1px dashed var(--border); display: flex; align-items: center; justify-content: center;
+      color: var(--text-muted); font-size: 12px; cursor: pointer;
     }
     .slot-label { font-size: 11px; color: var(--text-muted); font-weight: 600; }
-    pre {
-      background: var(--bg);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 14px;
-      overflow-x: auto;
-      font-size: 13px;
-      color: var(--text);
-    }
+    pre { background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 14px; overflow-x: auto; font-size: 13px; color: var(--text); }
     .modal-backdrop {
-      position: fixed;
-      inset: 0;
-      background: rgba(15, 18, 16, 0.82);
-      display: none;
-      align-items: center;
-      justify-content: center;
-      padding: 20px;
-      z-index: 100;
+      position: fixed; inset: 0; background: rgba(15, 18, 16, 0.82);
+      display: none; align-items: center; justify-content: center; padding: 20px; z-index: 100;
     }
     .modal-backdrop.open { display: flex; }
     .modal-box {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 16px;
-      padding: 22px;
-      width: 100%;
-      max-width: 420px;
-      text-align: center;
+      background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
+      padding: 22px; width: 100%; max-width: 420px; text-align: center;
     }
-    .qr-frame {
-      background: #fcfbf8;
-      border-radius: 14px;
-      padding: 14px;
-      display: inline-block;
-      margin: 12px 0;
-      border: 1px solid var(--border);
-    }
+    .qr-frame { background: #fcfbf8; border-radius: 14px; padding: 14px; display: inline-block; margin: 12px 0; border: 1px solid var(--border); }
     .qr-frame img { width: 240px; height: 240px; display: block; }
     .lightbox img { max-width: 92vw; max-height: 80vh; border-radius: 12px; }
     .lightbox-cap { color: #f2efe9; font-size: 15px; font-weight: 600; margin-top: 10px; }
     .hidden { display: none !important; }
+    .link-btn { background: none; border: none; color: var(--primary); padding: 4px; min-height: auto; text-decoration: underline; }
+    .activity-row { padding: 12px 0; border-top: 1px solid var(--border); display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+    .activity-row:first-child { border-top: none; padding-top: 4px; }
   </style>
 </head>
 <body>
   <header>
-    <div class="brand">GrocyGo</div>
+    <div class="brand">
+      <span>GrocyGo</span>
+      <span id="userPill" class="tag hidden"></span>
+    </div>
     <nav id="navTabs" class="hidden" aria-label="Main navigation">
       <button data-tab="inventory" class="active">Inventory</button>
       <button data-tab="shopping">Shopping</button>
       <button data-tab="locations">Locations</button>
-      <button data-tab="import">Import</button>
+      <button data-tab="activity">Activity</button>
+      <button data-tab="users" id="usersTabBtn" class="hidden">Users</button>
+      <button data-tab="import" id="importTabBtn" class="hidden">Import</button>
       <button data-tab="keys">API &amp; MCP</button>
       <button id="logoutBtn" class="danger">Sign Out</button>
     </nav>
   </header>
 
   <main>
-    <section id="loginView" class="card" style="max-width:440px;margin:56px auto;">
-      <h2 style="margin-top:0;margin-bottom:6px;">Sign in</h2>
-      <p class="muted" style="margin-top:0;">Enter your API key from the server logs.</p>
-      <div class="row" style="margin-top:14px;">
-        <input id="apiKeyInput" type="password" placeholder="API key" aria-label="API key" style="flex:1;" />
-        <button id="loginBtn" class="primary">Connect</button>
+    <!-- Login View -->
+    <section id="loginView" class="card" style="max-width:440px;margin:48px auto;">
+      <h2 style="margin-top:0;margin-bottom:6px;">Sign in to GrocyGo</h2>
+
+      <div id="pwLoginBox">
+        <p class="muted" style="margin-top:0;">Use your household username and password (default admin credentials are printed in container logs on first boot).</p>
+        <div class="field">
+          <label for="loginUsername">Username</label>
+          <input id="loginUsername" autocomplete="username" placeholder="admin" />
+        </div>
+        <div class="field">
+          <label for="loginPassword">Password</label>
+          <input id="loginPassword" type="password" autocomplete="current-password" placeholder="Password" />
+        </div>
+        <button id="pwLoginBtn" class="primary" style="width:100%;">Sign In</button>
+        <div style="text-align:center;margin-top:12px;">
+          <button class="link-btn" id="switchToKeyBtn">Or sign in with API Key</button>
+        </div>
       </div>
+
+      <div id="keyLoginBox" class="hidden">
+        <p class="muted" style="margin-top:0;">Enter your personal API key.</p>
+        <div class="field">
+          <label for="apiKeyInput">API Key</label>
+          <input id="apiKeyInput" type="password" placeholder="gg_..." />
+        </div>
+        <button id="keyLoginBtn" class="primary" style="width:100%;">Connect with API Key</button>
+        <div style="text-align:center;margin-top:12px;">
+          <button class="link-btn" id="switchToPwBtn">Back to Username &amp; Password</button>
+        </div>
+      </div>
+
       <p id="loginErr" style="color:var(--danger);font-size:14px;margin-bottom:0;"></p>
     </section>
 
     <section id="appView" class="hidden">
+      <!-- Inventory Tab -->
       <div id="tab-inventory">
         <div class="between" style="margin-bottom:14px;">
           <input id="searchInput" placeholder="Search food inventory..." aria-label="Search food inventory" style="flex:1;max-width:400px;" />
@@ -226,6 +213,7 @@ export function renderWebUiHtml(): string {
         <div id="inventoryList"></div>
       </div>
 
+      <!-- Shopping Tab -->
       <div id="tab-shopping" class="hidden">
         <div class="card">
           <div class="row">
@@ -239,6 +227,7 @@ export function renderWebUiHtml(): string {
         <div id="shoppingList"></div>
       </div>
 
+      <!-- Locations Tab -->
       <div id="tab-locations" class="hidden">
         <div class="card">
           <div class="row">
@@ -250,6 +239,42 @@ export function renderWebUiHtml(): string {
         <div id="locationsList"></div>
       </div>
 
+      <!-- Activity Tab -->
+      <div id="tab-activity" class="hidden">
+        <div class="card">
+          <div class="between" style="margin-bottom:10px;">
+            <h3 style="margin:0;">Household Activity</h3>
+            <button id="refreshActivityBtn">Refresh</button>
+          </div>
+          <p class="muted" style="margin-top:0;">See who added, used, moved, or added items to the shopping list and when.</p>
+          <div id="activityList"></div>
+        </div>
+      </div>
+
+      <!-- Users Tab (Admins) -->
+      <div id="tab-users" class="hidden">
+        <div class="card">
+          <h3 style="margin-top:0;margin-bottom:10px;">Add Household Member</h3>
+          <div class="row">
+            <input id="newUserUsername" placeholder="Username (e.g. sarah)" style="flex:1;min-width:160px;" />
+            <input id="newUserDisplay" placeholder="Display Name (e.g. Sarah)" style="flex:1;min-width:160px;" />
+            <input id="newUserPassword" type="password" placeholder="Password" style="flex:1;min-width:150px;" />
+            <select id="newUserRole">
+              <option value="member">Member</option>
+              <option value="admin">Admin</option>
+            </select>
+            <button id="addUserBtn" class="primary">Add User</button>
+          </div>
+          <div id="userStatus" class="hidden"></div>
+        </div>
+        <div class="card">
+          <h3 style="margin-top:0;margin-bottom:6px;">Household Members</h3>
+          <p class="muted" style="margin-top:0;">Each person has their own login and personal QR code for the GrocyGo mobile app.</p>
+          <div id="usersList"></div>
+        </div>
+      </div>
+
+      <!-- Import Tab (Admins) -->
       <div id="tab-import" class="hidden">
         <div class="card">
           <h3 style="margin-top:0;margin-bottom:6px;">Import from Running Grocy Server</h3>
@@ -281,7 +306,7 @@ export function renderWebUiHtml(): string {
         <div class="card">
           <h3 style="margin-top:0;margin-bottom:6px;">Import from Original Grocy SQLite File (grocy.db)</h3>
           <p class="muted" style="margin-top:0;">
-            Already stopped your old Grocy container? Upload <code>grocy.db</code> directly from your old appdata folder.
+            Upload <code>grocy.db</code> directly from your old Grocy appdata folder.
           </p>
           <div class="row" style="margin-bottom:12px;">
             <input id="grocyDbFile" type="file" accept=".db,.sqlite,.sqlite3,application/octet-stream" />
@@ -297,6 +322,7 @@ export function renderWebUiHtml(): string {
         </div>
       </div>
 
+      <!-- API & MCP Tab -->
       <div id="tab-keys" class="hidden">
         <div class="card">
           <div class="between" style="margin-bottom:10px;">
@@ -304,14 +330,24 @@ export function renderWebUiHtml(): string {
             <button id="createKeyBtn" class="primary">New API Key</button>
           </div>
           <p class="muted" style="margin-top:0;">
-            Click <strong>QR Code</strong> on any key and scan it from the GrocyGo mobile app to connect instantly.
+            Click <strong>QR Code</strong> on any key and scan it from the GrocyGo mobile app to connect as that user.
           </p>
           <div id="keysList"></div>
         </div>
 
         <div class="card">
+          <h3 style="margin-top:0;margin-bottom:6px;">Change My Password</h3>
+          <div class="row">
+            <input id="curPwInput" type="password" placeholder="Current password" style="flex:1;" />
+            <input id="newPwInput" type="password" placeholder="New password" style="flex:1;" />
+            <button id="changePwBtn" class="primary">Update Password</button>
+          </div>
+          <div id="changePwStatus" class="hidden"></div>
+        </div>
+
+        <div class="card">
           <h3 style="margin-top:0;margin-bottom:6px;">Read-Only MCP Endpoint</h3>
-          <p class="muted" style="margin-top:0;">Lightweight food inventory &amp; shopping list tools for AI agents.</p>
+          <p class="muted" style="margin-top:0;">Lightweight food inventory, shopping list, and activity tools for AI agents.</p>
           <pre id="mcpSnippet"></pre>
         </div>
       </div>
@@ -330,7 +366,7 @@ export function renderWebUiHtml(): string {
   <div id="qrModal" class="modal-backdrop" onclick="if(event.target===this)this.classList.remove('open')">
     <div class="modal-box">
       <div class="between" style="margin-bottom:8px;">
-        <h3 style="margin:0;">Scan with GrocyGo App</h3>
+        <h3 style="margin:0;" id="qrModalTitle">Scan with GrocyGo App</h3>
         <button onclick="document.getElementById('qrModal').classList.remove('open')">Close</button>
       </div>
       <div class="field" style="text-align:left;margin-top:10px;">
@@ -347,14 +383,15 @@ export function renderWebUiHtml(): string {
 
   <script>
     let apiKey = localStorage.getItem('grocygo_key') || '';
-    let state = { stock: [], locations: [], units: [], shopping: [], keys: [] };
+    let currentUser = null;
+    let state = { stock: [], locations: [], units: [], shopping: [], keys: [], activity: [], users: [] };
     let activeQrKey = '';
 
     async function api(path, opts = {}) {
       const res = await fetch(path, {
         ...opts,
         headers: {
-          'GROCY-API-KEY': apiKey,
+          ...(apiKey ? { 'GROCY-API-KEY': apiKey } : {}),
           ...(opts.body && typeof opts.body === 'string' ? { 'Content-Type': 'application/json' } : {}),
           ...(opts.headers || {}),
         },
@@ -380,8 +417,9 @@ export function renderWebUiHtml(): string {
       document.getElementById('qrPayloadPreview').textContent = base + ' | ' + activeQrKey.slice(0, 8) + '...';
     }
 
-    window.openQrModal = (key) => {
+    window.openQrModal = (key, label) => {
       activeQrKey = key;
+      document.getElementById('qrModalTitle').textContent = label ? 'QR for ' + label : 'Scan with GrocyGo App';
       const savedUrl = localStorage.getItem('grocygo_qr_url') || window.location.origin;
       document.getElementById('qrServerUrl').value = savedUrl;
       refreshQrImage();
@@ -394,25 +432,48 @@ export function renderWebUiHtml(): string {
     };
 
     async function loadAll() {
-      const [stock, locations, units, shopping, keys] = await Promise.all([
+      const [me, stock, locations, units, shopping, keys, activity, users] = await Promise.all([
+        api('/api/auth/me'),
         api('/api/stock'),
         api('/api/objects/locations'),
         api('/api/objects/quantity_units'),
         api('/api/objects/shopping_list'),
         api('/api/objects/api_keys'),
+        api('/api/activity?limit=60'),
+        api('/api/users').catch(() => []),
       ]);
-      state = { stock, locations, units, shopping, keys };
+      currentUser = me;
+      state = { stock, locations, units, shopping, keys, activity, users };
       renderAll();
     }
 
+    const ACTION_VERBS = {
+      purchase: 'added',
+      consume: 'used',
+      spoiled: 'marked spoiled',
+      open: 'opened',
+      transfer: 'moved',
+      shopping_add: 'added to shopping list:',
+      shopping_done: 'checked off shopping list:',
+    };
+
     function renderAll() {
+      if (currentUser) {
+        const pill = document.getElementById('userPill');
+        pill.textContent = currentUser.display_name + (currentUser.role === 'admin' ? ' · Admin' : '');
+        pill.classList.remove('hidden');
+        const isAdmin = currentUser.role === 'admin';
+        document.getElementById('usersTabBtn').classList.toggle('hidden', !isAdmin);
+        document.getElementById('importTabBtn').classList.toggle('hidden', !isAdmin);
+      }
+
       const q = (document.getElementById('searchInput').value || '').toLowerCase();
       const locMap = Object.fromEntries(state.locations.map((l) => [l.id, l]));
       const unitMap = Object.fromEntries(state.units.map((u) => [u.id, u]));
 
+      // Inventory
       const filtered = state.stock.filter((s) => s.product.name.toLowerCase().includes(q));
-      const invEl = document.getElementById('inventoryList');
-      invEl.innerHTML = filtered.length
+      document.getElementById('inventoryList').innerHTML = filtered.length
         ? filtered
             .map((s) => {
               const loc = locMap[s.product.location_id];
@@ -447,34 +508,39 @@ export function renderWebUiHtml(): string {
                       </div>
                     </div>
                     <div class="row">
-                      <button onclick="quickConsume(\${s.product_id})" aria-label="Consume one">-1</button>
-                      <button onclick="quickAdd(\${s.product_id})" aria-label="Add one">+1</button>
+                      <button onclick="quickConsume(\${s.product_id})">-1</button>
+                      <button onclick="quickAdd(\${s.product_id})">+1</button>
                     </div>
                   </div>
                 </div>\`;
             })
             .join('')
-        : '<div class="card muted">No stocked items yet. Scan items in GrocyGo or import from your old Grocy server.</div>';
+        : '<div class="card muted">No stocked items yet.</div>';
 
-      const shopEl = document.getElementById('shoppingList');
-      shopEl.innerHTML = state.shopping.length
+      // Shopping list with attribution
+      document.getElementById('shoppingList').innerHTML = state.shopping.length
         ? state.shopping
-            .map((item) => \`
-              <div class="card between">
-                <label class="row" style="cursor:pointer;flex:1;">
-                  <input type="checkbox" style="min-height:auto;width:20px;height:20px;" \${item.done ? 'checked' : ''} onchange="toggleShop(\${item.id}, this.checked)" />
-                  <span style="\${item.done ? 'text-decoration:line-through;opacity:0.55;' : ''}">
-                    <strong>\${escapeHtml(item.product_name || item.note || 'Item')}</strong>
-                    &times; \${item.amount}
-                  </span>
-                </label>
-                <button class="danger" onclick="deleteShop(\${item.id})">Remove</button>
-              </div>\`)
+            .map((item) => {
+              const who = [];
+              if (item.added_by_name) who.push('Added by ' + item.added_by_name);
+              if (item.done && item.completed_by_name) who.push('Checked by ' + item.completed_by_name);
+              return \`
+                <div class="card between">
+                  <label class="row" style="cursor:pointer;flex:1;">
+                    <input type="checkbox" style="min-height:auto;width:20px;height:20px;" \${item.done ? 'checked' : ''} onchange="toggleShop(\${item.id}, this.checked)" />
+                    <div style="\${item.done ? 'text-decoration:line-through;opacity:0.55;' : ''}">
+                      <strong>\${escapeHtml(item.product_name || item.note || 'Item')}</strong> &times; \${item.amount}
+                      \${who.length ? \`<div class="muted" style="font-size:12px;">\${escapeHtml(who.join(' · '))}</div>\` : ''}
+                    </div>
+                  </label>
+                  <button class="danger" onclick="deleteShop(\${item.id})">Remove</button>
+                </div>\`;
+            })
             .join('')
         : '<div class="card muted">Shopping list is empty.</div>';
 
-      const locEl = document.getElementById('locationsList');
-      locEl.innerHTML = state.locations
+      // Locations
+      document.getElementById('locationsList').innerHTML = state.locations
         .map((l) => \`
           <div class="card between">
             <div>
@@ -486,6 +552,46 @@ export function renderWebUiHtml(): string {
           </div>\`)
         .join('');
 
+      // Activity feed
+      document.getElementById('activityList').innerHTML = state.activity.length
+        ? state.activity
+            .map((e) => {
+              const verb = ACTION_VERBS[e.transaction_type] || e.transaction_type;
+              const qty = Math.abs(Number(e.amount || 0));
+              const unit = qty === 1 ? e.qu_name : (e.qu_name_plural || e.qu_name);
+              const qtyPart = qty > 0 ? qty + (unit ? ' ' + unit : '') + ' ' : '';
+              return \`
+                <div class="activity-row">
+                  <div>
+                    <strong>\${escapeHtml(e.user_display_name)}</strong> \${escapeHtml(verb)}
+                    <strong>\${escapeHtml(qtyPart + e.product_name)}</strong>
+                    \${e.location_name ? \`<span class="muted"> · \${escapeHtml(e.location_name)}</span>\` : ''}
+                    \${e.note ? \`<span class="muted"> (\${escapeHtml(e.note)})</span>\` : ''}
+                  </div>
+                  <div class="muted" style="font-size:13px;">\${escapeHtml(formatTime(e.timestamp))}</div>
+                </div>\`;
+            })
+            .join('')
+        : '<div class="muted">No activity recorded yet.</div>';
+
+      // Users list (Admins)
+      document.getElementById('usersList').innerHTML = state.users
+        .map((u) => \`
+          <div class="between" style="padding:12px 0;border-top:1px solid var(--border);">
+            <div>
+              <strong>\${escapeHtml(u.display_name)}</strong>
+              <span class="muted">(@\${escapeHtml(u.username)})</span>
+              <span class="tag" style="margin-left:6px;">\${escapeHtml(u.role)}</span>
+            </div>
+            <div class="row">
+              \${u.primary_api_key ? \`<button class="primary" onclick="openQrModal('\${escapeAttr(u.primary_api_key)}', '\${escapeAttr(u.display_name)}')">QR Code</button>\` : ''}
+              <button onclick="resetUserPassword(\${u.id}, '\${escapeAttr(u.display_name)}')">Reset Password</button>
+              \${currentUser && u.id !== currentUser.id ? \`<button class="danger" onclick="deleteUser(\${u.id}, '\${escapeAttr(u.display_name)}')">Delete</button>\` : ''}
+            </div>
+          </div>\`)
+        .join('');
+
+      // MCP & API Keys
       const origin = window.location.origin;
       document.getElementById('mcpSnippet').textContent = JSON.stringify(
         {
@@ -505,10 +611,10 @@ export function renderWebUiHtml(): string {
           <div class="between" style="padding:12px 0;border-top:1px solid var(--border);">
             <div>
               <code style="font-size:14px;">\${escapeHtml(k.api_key)}</code>
-              <div class="muted">\${escapeHtml(k.description || 'API Key')}</div>
+              <div class="muted">\${escapeHtml((k.user_display_name ? k.user_display_name + ' · ' : '') + (k.description || 'API Key'))}</div>
             </div>
             <div class="row">
-              <button class="primary" onclick="openQrModal('\${escapeAttr(k.api_key)}')">QR Code</button>
+              <button class="primary" onclick="openQrModal('\${escapeAttr(k.api_key)}', '\${escapeAttr(k.user_display_name || 'GrocyGo')}')">QR Code</button>
               <button onclick="navigator.clipboard.writeText('\${escapeAttr(k.api_key)}')">Copy Key</button>
             </div>
           </div>\`)
@@ -520,6 +626,11 @@ export function renderWebUiHtml(): string {
     }
     function escapeAttr(s) {
       return escapeHtml(s).replace(/'/g, "\\'");
+    }
+    function formatTime(ts) {
+      if (!ts) return '';
+      const d = new Date(ts.includes('T') ? ts : ts.replace(' ', 'T') + 'Z');
+      return isNaN(d.getTime()) ? ts : d.toLocaleString();
     }
     function formatImportSummary(r) {
       return (
@@ -555,6 +666,62 @@ export function renderWebUiHtml(): string {
     window.deleteShop = async (id) => { await api('/api/objects/shopping_list/' + id, { method: 'DELETE' }); await loadAll(); };
     window.deleteLoc = async (id) => { try { await api('/api/objects/locations/' + id, { method: 'DELETE' }); await loadAll(); } catch (e) { alert(e.message); } };
 
+    window.resetUserPassword = async (id, name) => {
+      const pw = prompt('Enter a new password for ' + name + ' (min 4 characters):');
+      if (!pw) return;
+      try {
+        await api('/api/users/' + id, { method: 'PUT', body: JSON.stringify({ password: pw }) });
+        alert('Password updated for ' + name);
+      } catch (e) { alert(e.message); }
+    };
+    window.deleteUser = async (id, name) => {
+      if (!confirm('Delete user ' + name + '? Their activity history will remain.')) return;
+      try {
+        await api('/api/users/' + id, { method: 'DELETE' });
+        await loadAll();
+      } catch (e) { alert(e.message); }
+    };
+
+    document.getElementById('addUserBtn').onclick = async () => {
+      const st = document.getElementById('userStatus');
+      const username = document.getElementById('newUserUsername').value.trim();
+      const display_name = document.getElementById('newUserDisplay').value.trim() || username;
+      const password = document.getElementById('newUserPassword').value;
+      const role = document.getElementById('newUserRole').value;
+      try {
+        await api('/api/users', { method: 'POST', body: JSON.stringify({ username, display_name, password, role }) });
+        document.getElementById('newUserUsername').value = '';
+        document.getElementById('newUserDisplay').value = '';
+        document.getElementById('newUserPassword').value = '';
+        st.className = 'notice';
+        st.textContent = 'Added ' + display_name + ' (@' + username + '). They can now sign in or scan their QR code.';
+        await loadAll();
+      } catch (e) {
+        st.className = 'notice err';
+        st.textContent = e.message;
+      }
+    };
+
+    document.getElementById('changePwBtn').onclick = async () => {
+      const st = document.getElementById('changePwStatus');
+      try {
+        await api('/api/auth/change-password', {
+          method: 'POST',
+          body: JSON.stringify({
+            current_password: document.getElementById('curPwInput').value,
+            new_password: document.getElementById('newPwInput').value,
+          }),
+        });
+        document.getElementById('curPwInput').value = '';
+        document.getElementById('newPwInput').value = '';
+        st.className = 'notice';
+        st.textContent = 'Password updated.';
+      } catch (e) {
+        st.className = 'notice err';
+        st.textContent = e.message;
+      }
+    };
+
     document.getElementById('runApiImportBtn').onclick = async () => {
       const btn = document.getElementById('runApiImportBtn');
       const statusEl = document.getElementById('apiImportStatus');
@@ -584,9 +751,7 @@ export function renderWebUiHtml(): string {
       } catch (e) {
         statusEl.className = 'notice err';
         statusEl.textContent = e.message;
-      } finally {
-        btn.disabled = false;
-      }
+      } finally { btn.disabled = false; }
     };
 
     document.getElementById('runDbImportBtn').onclick = async () => {
@@ -617,18 +782,50 @@ export function renderWebUiHtml(): string {
       } catch (e) {
         statusEl.className = 'notice err';
         statusEl.textContent = e.message;
-      } finally {
-        btn.disabled = false;
+      } finally { btn.disabled = false; }
+    };
+
+    // Login switches & handlers
+    document.getElementById('switchToKeyBtn').onclick = () => {
+      document.getElementById('pwLoginBox').classList.add('hidden');
+      document.getElementById('keyLoginBox').classList.remove('hidden');
+      document.getElementById('loginErr').textContent = '';
+    };
+    document.getElementById('switchToPwBtn').onclick = () => {
+      document.getElementById('keyLoginBox').classList.add('hidden');
+      document.getElementById('pwLoginBox').classList.remove('hidden');
+      document.getElementById('loginErr').textContent = '';
+    };
+
+    document.getElementById('pwLoginBtn').onclick = async () => {
+      document.getElementById('loginErr').textContent = '';
+      try {
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username: document.getElementById('loginUsername').value.trim(),
+            password: document.getElementById('loginPassword').value,
+            device_name: 'Web UI',
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error_message || 'Login failed');
+        apiKey = data.api_key;
+        localStorage.setItem('grocygo_key', apiKey);
+        await showApp();
+      } catch (e) {
+        document.getElementById('loginErr').textContent = e.message;
       }
     };
 
-    document.getElementById('loginBtn').onclick = async () => {
+    document.getElementById('keyLoginBtn').onclick = async () => {
       apiKey = document.getElementById('apiKeyInput').value.trim();
       document.getElementById('loginErr').textContent = '';
       try {
-        await api('/api/system/info');
+        await api('/api/auth/me');
         localStorage.setItem('grocygo_key', apiKey);
-        showApp();
+        await showApp();
       } catch (e) {
         document.getElementById('loginErr').textContent = e.message;
       }
@@ -637,6 +834,8 @@ export function renderWebUiHtml(): string {
     document.getElementById('logoutBtn').onclick = () => {
       localStorage.removeItem('grocygo_key');
       apiKey = '';
+      currentUser = null;
+      document.getElementById('userPill').classList.add('hidden');
       document.getElementById('appView').classList.add('hidden');
       document.getElementById('navTabs').classList.add('hidden');
       document.getElementById('loginView').classList.remove('hidden');
@@ -646,7 +845,7 @@ export function renderWebUiHtml(): string {
       btn.onclick = () => {
         document.querySelectorAll('#navTabs button[data-tab]').forEach((b) => b.classList.remove('active'));
         btn.classList.add('active');
-        ['inventory', 'shopping', 'locations', 'import', 'keys'].forEach((t) => {
+        ['inventory', 'shopping', 'locations', 'activity', 'users', 'import', 'keys'].forEach((t) => {
           document.getElementById('tab-' + t).classList.toggle('hidden', t !== btn.dataset.tab);
         });
       };
@@ -654,6 +853,7 @@ export function renderWebUiHtml(): string {
 
     document.getElementById('searchInput').oninput = renderAll;
     document.getElementById('refreshBtn').onclick = loadAll;
+    document.getElementById('refreshActivityBtn').onclick = loadAll;
     document.getElementById('addShopBtn').onclick = async () => {
       const note = document.getElementById('shopItemInput').value.trim();
       const amount = Number(document.getElementById('shopQtyInput').value || 1);
@@ -686,7 +886,7 @@ export function renderWebUiHtml(): string {
     }
 
     if (apiKey) {
-      api('/api/system/info').then(showApp).catch(() => {});
+      api('/api/auth/me').then(showApp).catch(() => {});
     }
   </script>
 </body>

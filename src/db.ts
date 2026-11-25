@@ -1,13 +1,19 @@
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { generateApiKey, generateTempPassword, hashPassword } from './auth';
 
 export interface DbContext {
   db: DatabaseSync;
   dataDir: string;
   photosDir: string;
   initialApiKey: string | null;
+  initialAdminPassword: string | null;
+}
+
+function hasColumn(db: DatabaseSync, table: string, column: string): boolean {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  return cols.some((c) => c.name === column);
 }
 
 export function initDatabase(dataDir: string): DbContext {
@@ -22,10 +28,21 @@ export function initDatabase(dataDir: string): DbContext {
     PRAGMA journal_mode = WAL;
     PRAGMA foreign_keys = ON;
 
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+      display_name TEXT NOT NULL,
+      password_hash TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'member',
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     CREATE TABLE IF NOT EXISTS api_keys (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       api_key TEXT NOT NULL UNIQUE,
       description TEXT DEFAULT '',
+      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
@@ -108,17 +125,20 @@ export function initDatabase(dataDir: string): DbContext {
       shopping_location_id INTEGER REFERENCES shopping_locations(id) ON DELETE SET NULL,
       note TEXT DEFAULT '',
       photo_file_name TEXT DEFAULT NULL,
+      added_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
       row_created_timestamp TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
     CREATE TABLE IF NOT EXISTS stock_log (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      product_id INTEGER NOT NULL,
-      amount REAL NOT NULL,
+      product_id INTEGER,
+      item_label TEXT DEFAULT '',
+      amount REAL NOT NULL DEFAULT 0,
       transaction_type TEXT NOT NULL,
       location_id INTEGER,
       spoiled INTEGER NOT NULL DEFAULT 0,
       note TEXT DEFAULT '',
+      user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
       row_created_timestamp TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
@@ -137,6 +157,9 @@ export function initDatabase(dataDir: string): DbContext {
       shopping_list_id INTEGER NOT NULL DEFAULT 1 REFERENCES shopping_lists(id) ON DELETE CASCADE,
       done INTEGER NOT NULL DEFAULT 0,
       qu_id INTEGER REFERENCES quantity_units(id) ON DELETE SET NULL,
+      added_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      completed_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      completed_at TEXT DEFAULT NULL,
       row_created_timestamp TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
@@ -144,13 +167,54 @@ export function initDatabase(dataDir: string): DbContext {
     CREATE INDEX IF NOT EXISTS idx_stock_location ON stock(location_id);
     CREATE INDEX IF NOT EXISTS idx_barcodes_code ON product_barcodes(barcode);
     CREATE INDEX IF NOT EXISTS idx_shopping_list_list ON shopping_list(shopping_list_id);
+    CREATE INDEX IF NOT EXISTS idx_stock_log_time ON stock_log(id DESC);
   `);
 
-  // Safe migration for existing databases missing storage_photo_file_name
-  const prodCols = db.prepare('PRAGMA table_info(products)').all() as Array<{ name: string }>;
-  if (!prodCols.some((c) => c.name === 'storage_photo_file_name')) {
+  // Safe migrations for existing databases
+  if (!hasColumn(db, 'products', 'storage_photo_file_name')) {
     db.exec('ALTER TABLE products ADD COLUMN storage_photo_file_name TEXT DEFAULT NULL;');
   }
+  if (!hasColumn(db, 'api_keys', 'user_id')) {
+    db.exec('ALTER TABLE api_keys ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE CASCADE;');
+  }
+  if (!hasColumn(db, 'stock', 'added_by_user_id')) {
+    db.exec('ALTER TABLE stock ADD COLUMN added_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL;');
+  }
+  if (!hasColumn(db, 'stock_log', 'user_id')) {
+    db.exec('ALTER TABLE stock_log ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE SET NULL;');
+  }
+  if (!hasColumn(db, 'stock_log', 'item_label')) {
+    db.exec("ALTER TABLE stock_log ADD COLUMN item_label TEXT DEFAULT '';");
+  }
+  if (!hasColumn(db, 'shopping_list', 'added_by_user_id')) {
+    db.exec('ALTER TABLE shopping_list ADD COLUMN added_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL;');
+  }
+  if (!hasColumn(db, 'shopping_list', 'completed_by_user_id')) {
+    db.exec('ALTER TABLE shopping_list ADD COLUMN completed_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL;');
+  }
+  if (!hasColumn(db, 'shopping_list', 'completed_at')) {
+    db.exec('ALTER TABLE shopping_list ADD COLUMN completed_at TEXT DEFAULT NULL;');
+  }
+
+  // Ensure default admin user exists
+  let initialAdminPassword: string | null = null;
+  let defaultAdmin = db
+    .prepare("SELECT id FROM users WHERE role = 'admin' ORDER BY id ASC LIMIT 1")
+    .get() as { id: number } | undefined;
+
+  if (!defaultAdmin) {
+    const adminUsername = (process.env.INITIAL_ADMIN_USER || 'admin').trim();
+    initialAdminPassword = process.env.INITIAL_ADMIN_PASSWORD?.trim() || generateTempPassword();
+    const info = db
+      .prepare(
+        'INSERT INTO users (username, display_name, password_hash, role, active) VALUES (?, ?, ?, ?, 1)'
+      )
+      .run(adminUsername, 'Admin', hashPassword(initialAdminPassword), 'admin');
+    defaultAdmin = { id: Number(info.lastInsertRowid) };
+  }
+
+  // Attach any legacy API keys without a user_id to defaultAdmin
+  db.prepare('UPDATE api_keys SET user_id = ? WHERE user_id IS NULL').run(defaultAdmin.id);
 
   // Seed default locations
   const locCount = (db.prepare('SELECT COUNT(*) as c FROM locations').get() as { c: number }).c;
@@ -216,27 +280,27 @@ export function initDatabase(dataDir: string): DbContext {
     );
   }
 
-  // Ensure at least one API key exists
+  // Ensure at least one API key exists (linked to defaultAdmin)
   let initialApiKey: string | null = null;
   const keyCount = (db.prepare('SELECT COUNT(*) as c FROM api_keys').get() as { c: number }).c;
   if (keyCount === 0) {
-    initialApiKey =
-      process.env.INITIAL_API_KEY?.trim() ||
-      `gg_${crypto.randomBytes(24).toString('base64url')}`;
-    db.prepare('INSERT INTO api_keys (api_key, description) VALUES (?, ?)').run(
+    initialApiKey = process.env.INITIAL_API_KEY?.trim() || generateApiKey();
+    db.prepare('INSERT INTO api_keys (api_key, description, user_id) VALUES (?, ?, ?)').run(
       initialApiKey,
-      'Initial Default Key'
+      'Initial Admin Key',
+      defaultAdmin.id
     );
   } else if (process.env.INITIAL_API_KEY?.trim()) {
     const envKey = process.env.INITIAL_API_KEY.trim();
     const exists = db.prepare('SELECT id FROM api_keys WHERE api_key = ?').get(envKey);
     if (!exists) {
-      db.prepare('INSERT INTO api_keys (api_key, description) VALUES (?, ?)').run(
+      db.prepare('INSERT INTO api_keys (api_key, description, user_id) VALUES (?, ?, ?)').run(
         envKey,
-        'Configured via INITIAL_API_KEY'
+        'Configured via INITIAL_API_KEY',
+        defaultAdmin.id
       );
     }
   }
 
-  return { db, dataDir, photosDir, initialApiKey };
+  return { db, dataDir, photosDir, initialApiKey, initialAdminPassword };
 }

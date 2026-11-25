@@ -80,6 +80,21 @@ const MCP_TOOLS = [
       additionalProperties: false,
     },
   },
+  {
+    name: 'recent_activity',
+    description:
+      'Get compact household activity log showing who added, consumed, moved, or added items to the shopping list and when.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        limit: {
+          type: 'integer',
+          description: 'Max recent events to return (default 15, max 50).',
+        },
+      },
+      additionalProperties: false,
+    },
+  },
 ];
 
 function fmtQty(amount: number, unit?: string, plural?: string): string {
@@ -419,7 +434,37 @@ function executeTool(name: string, args: Record<string, any>, service: Inventory
       const label = i.product_name || i.note || 'Item';
       const extraNote = i.product_name && i.note ? ` (${i.note})` : '';
       const qty = fmtQty(Number(i.amount || 1), i.qu_name, i.qu_name_plural);
-      return `${i.done ? '[x]' : '[ ]'} ${label} x ${qty}${extraNote}`;
+      const by = i.added_by_name ? ` [by ${i.added_by_name}]` : '';
+      return `${i.done ? '[x]' : '[ ]'} ${label} x ${qty}${extraNote}${by}`;
+    });
+    return textResult(lines.join('\n'));
+  }
+
+  if (name === 'recent_activity') {
+    const limit =
+      typeof args.limit === 'number' && args.limit > 0
+        ? Math.min(50, Math.floor(args.limit))
+        : 15;
+    const events = service.getActivity({ limit });
+    if (events.length === 0) return textResult('No recent activity.');
+
+    const verbMap: Record<string, string> = {
+      purchase: 'added',
+      consume: 'used',
+      spoiled: 'marked spoiled',
+      open: 'opened',
+      transfer: 'moved',
+      shopping_add: 'added to shopping list',
+      shopping_done: 'checked off shopping list',
+    };
+
+    const lines = events.map((e) => {
+      const verb = verbMap[e.transaction_type] || e.transaction_type;
+      const qty = Math.abs(Number(e.amount || 0));
+      const qtyStr = qty > 0 ? `${fmtQty(qty, e.qu_name, e.qu_name_plural)} ` : '';
+      const locStr = e.location_name ? ` @ ${e.location_name}` : '';
+      const noteStr = e.note ? ` (${e.note})` : '';
+      return `${e.timestamp} | ${e.user_display_name} ${verb} ${qtyStr}${e.product_name}${locStr}${noteStr}`;
     });
     return textResult(lines.join('\n'));
   }

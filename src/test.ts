@@ -11,6 +11,7 @@ import { InventoryService } from './inventoryService';
 async function runTests() {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'grocygo-server-test-'));
   process.env.INITIAL_API_KEY = 'test_secret_key_123';
+  process.env.INITIAL_ADMIN_PASSWORD = 'admin_pass_123';
 
   const ctx = initDatabase(tmpDir);
   const service = new InventoryService(ctx);
@@ -157,7 +158,7 @@ async function runTests() {
     assert.equal(init.result.serverInfo.name, 'grocygo-mcp');
 
     const toolsList = await mcpCall(2, 'tools/list');
-    assert.equal(toolsList.result.tools.length, 5);
+    assert.equal(toolsList.result.tools.length, 6);
 
     const summary = await mcpCall(3, 'tools/call', { name: 'inventory_summary', arguments: {} });
     const summaryText: string = summary.result.content[0].text;
@@ -295,7 +296,69 @@ async function runTests() {
     assert.equal(dbImportReport.stock_entries, 1);
     assert.equal(dbImportReport.shopping_list, 1);
 
-    console.log('ALL SERVER + PHOTO + SHOPPING LIST + MCP + QR + GROCY IMPORT TESTS PASSED!');
+    // 12. Multi-user auth, role enforcement, and activity attribution
+    const adminLogin = await fetch(`${base}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: 'admin', password: 'admin_pass_123' }),
+    }).then((r) => r.json());
+    assert.equal(adminLogin.user.role, 'admin');
+    assert.ok(adminLogin.api_key);
+
+    const sarahCreated = await fetch(`${base}/api/users`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        username: 'sarah',
+        display_name: 'Sarah',
+        password: 'sarah_password',
+        role: 'member',
+      }),
+    }).then((r) => r.json());
+    assert.equal(sarahCreated.username, 'sarah');
+
+    const sarahLogin = await fetch(`${base}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: 'sarah', password: 'sarah_password' }),
+    }).then((r) => r.json());
+    const sarahHeaders = { 'GROCY-API-KEY': sarahLogin.api_key, 'Content-Type': 'application/json' };
+
+    // Member cannot create another user
+    const forbiddenUser = await fetch(`${base}/api/users`, {
+      method: 'POST',
+      headers: sarahHeaders,
+      body: JSON.stringify({ username: 'bob', password: 'pw1234' }),
+    });
+    assert.equal(forbiddenUser.status, 403);
+
+    // Sarah adds a shopping item and checks it off
+    const sarahShop = await fetch(`${base}/api/objects/shopping_list`, {
+      method: 'POST',
+      headers: sarahHeaders,
+      body: JSON.stringify({ note: 'Sourdough Bread', amount: 1, shopping_list_id: 1, done: 0 }),
+    }).then((r) => r.json());
+    await fetch(`${base}/api/objects/shopping_list/${sarahShop.created_object_id}`, {
+      method: 'PUT',
+      headers: sarahHeaders,
+      body: JSON.stringify({ done: 1 }),
+    });
+
+    const shopItems = await fetch(`${base}/api/objects/shopping_list`, { headers }).then((r) => r.json());
+    const breadItem = shopItems.find((i: any) => i.note === 'Sourdough Bread');
+    assert.equal(breadItem.added_by_name, 'Sarah');
+    assert.equal(breadItem.completed_by_name, 'Sarah');
+
+    const activity = await fetch(`${base}/api/activity?limit=10`, { headers }).then((r) => r.json());
+    assert.ok(activity.some((e: any) => e.user_display_name === 'Sarah' && e.product_name === 'Sourdough Bread'));
+
+    const mcpActivity = await mcpCall(7, 'tools/call', {
+      name: 'recent_activity',
+      arguments: { limit: 5 },
+    });
+    assert.ok(mcpActivity.result.content[0].text.includes('Sarah'));
+
+    console.log('ALL SERVER + PHOTO + SHOPPING + MCP + QR + IMPORT + MULTI-USER TESTS PASSED!');
     console.log('\nSample compact MCP inventory_summary output:\n' + summaryText);
     console.log('\nSample compact MCP search_inventory output:\n' + searchText);
   } finally {

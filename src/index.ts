@@ -16,17 +16,19 @@ export function startServer(port = PORT, host = HOST, dataDir = DATA_DIR) {
 
   server.listen(port, host, () => {
     console.log('');
-    console.log('===============================================');
-    console.log('  GrocyGo Server v1.1.0 (Food Inventory + MCP)');
-    console.log('===============================================');
+    console.log('====================================================');
+    console.log('  GrocyGo Server v1.2.0 (Food Inventory + MCP)');
+    console.log('====================================================');
     console.log(`  Web UI & API : http://${host === '0.0.0.0' ? 'localhost' : host}:${port}`);
     console.log(`  MCP Endpoint : http://${host === '0.0.0.0' ? 'localhost' : host}:${port}/mcp`);
     console.log(`  Data Dir     : ${dataDir}`);
+    if (ctx.initialAdminPassword) {
+      console.log(`  Admin Login  : ${process.env.INITIAL_ADMIN_USER || 'admin'} / ${ctx.initialAdminPassword}`);
+    }
     if (ctx.initialApiKey) {
       console.log(`  Initial Key  : ${ctx.initialApiKey}`);
-      console.log('  (Save this API key for the GrocyGo mobile app & MCP clients)');
     }
-    console.log('===============================================');
+    console.log('====================================================');
     console.log('');
   });
 
