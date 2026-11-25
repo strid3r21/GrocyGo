@@ -204,8 +204,50 @@ const MCP_WRITE_TOOLS = [
   },
 ];
 
+const MCP_DELETE_TOOLS = [
+  {
+    name: 'delete_group',
+    description:
+      'Delete a product group by group_id or group_name. Items in the group become ungrouped (not deleted).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        group_id: { type: 'integer', description: 'Group ID to delete.' },
+        group_name: { type: 'string', description: 'Group name to delete.' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'delete_shopping_item',
+    description: 'Delete an item from the household shopping list by numeric id or name.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'integer', description: 'Shopping list row ID.' },
+        name: { type: 'string', description: 'Shopping list item name (exact or partial match).' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'delete_item',
+    description:
+      'Permanently delete a product (and its stock entries/barcodes) from inventory by numeric id or name.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'integer', description: 'Product ID to delete.' },
+        name: { type: 'string', description: 'Product name to delete (exact match).' },
+      },
+      additionalProperties: false,
+    },
+  },
+];
+
 const READ_TOOL_NAMES = new Set(MCP_READ_TOOLS.map((t) => t.name));
 const WRITE_TOOL_NAMES = new Set(MCP_WRITE_TOOLS.map((t) => t.name));
+const DELETE_TOOL_NAMES = new Set(MCP_DELETE_TOOLS.map((t) => t.name));
 
 function fmtQty(amount: number, unit?: string, plural?: string): string {
   const rounded = Math.round(amount * 100) / 100;
@@ -249,20 +291,14 @@ export function handleMcpJsonRpc(
   if (method === 'initialize') {
     const requestedVersion =
       typeof params?.protocolVersion === 'string' ? params.protocolVersion : '2025-03-26';
-    let instructions = 'GrocyGo food inventory and shopping list MCP server.';
-    if (perms.read_enabled && perms.write_enabled) {
-      instructions =
-        'Read/Write food inventory and shopping list MCP server. Start with inventory_summary, search_inventory, or list_groups. Use create_group, assign_items_to_group, update_item, or add_to_shopping_list to make changes.';
-    } else if (perms.read_enabled) {
-      instructions =
-        'Read-only food inventory and shopping list MCP server (Write access is currently disabled in MCP settings). Start with inventory_summary, search_inventory, or list_groups.';
-    } else if (perms.write_enabled) {
-      instructions =
-        'Write-only food inventory MCP server (Read access is currently disabled in MCP settings).';
-    } else {
-      instructions =
-        'GrocyGo MCP tools are currently disabled in server MCP settings.';
-    }
+    const caps: string[] = [];
+    if (perms.read_enabled) caps.push('Read');
+    if (perms.write_enabled) caps.push('Write');
+    if (perms.delete_enabled) caps.push('Delete');
+    const instructions =
+      caps.length > 0
+        ? `GrocyGo food inventory and shopping list MCP server (Enabled permissions: ${caps.join(', ')}).`
+        : 'GrocyGo MCP tools are currently disabled in server MCP settings.';
 
     return {
       status: 200,
@@ -276,7 +312,7 @@ export function handleMcpJsonRpc(
           },
           serverInfo: {
             name: 'grocygo-mcp',
-            version: '1.5.0',
+            version: '1.7.0',
           },
           instructions,
         },
@@ -292,6 +328,7 @@ export function handleMcpJsonRpc(
     const tools = [
       ...(perms.read_enabled ? MCP_READ_TOOLS : []),
       ...(perms.write_enabled ? MCP_WRITE_TOOLS : []),
+      ...(perms.delete_enabled ? MCP_DELETE_TOOLS : []),
     ];
     return {
       status: 200,
@@ -329,6 +366,20 @@ export function handleMcpJsonRpc(
           id,
           result: textResult(
             'Permission denied: MCP Write access is currently disabled in GrocyGo MCP settings. Enable Write permissions in GrocyGo to allow edits.',
+            true
+          ),
+        },
+      };
+    }
+
+    if (DELETE_TOOL_NAMES.has(toolName) && !perms.delete_enabled) {
+      return {
+        status: 200,
+        response: {
+          jsonrpc: '2.0',
+          id,
+          result: textResult(
+            'Permission denied: MCP Delete access is currently disabled in GrocyGo MCP settings. Enable Delete permissions separately to allow deletions.',
             true
           ),
         },
@@ -899,6 +950,81 @@ function executeTool(
     service.recordShoppingListNotification(actingUserId, itemName);
 
     return textResult(`Added to shopping list (#${Number(info.lastInsertRowid)}): ${itemName} x ${qty}`);
+  }
+
+  // ─── DELETE TOOLS ───────────────────────────────────────────
+
+  if (name === 'delete_group') {
+    let target: { id: number; name: string } | undefined;
+    if (typeof args.group_id === 'number' && args.group_id > 0) {
+      target = db
+        .prepare('SELECT id, name FROM product_groups WHERE id = ?')
+        .get(args.group_id) as { id: number; name: string } | undefined;
+    } else if (typeof args.group_name === 'string' && args.group_name.trim()) {
+      target = db
+        .prepare('SELECT id, name FROM product_groups WHERE LOWER(name) = LOWER(?) LIMIT 1')
+        .get(args.group_name.trim()) as { id: number; name: string } | undefined;
+    }
+    if (!target) return textResult('Group not found. Provide a valid group_id or group_name.', true);
+    db.prepare('DELETE FROM product_groups WHERE id = ?').run(target.id);
+    service.logActivity({
+      itemLabel: target.name,
+      amount: 0,
+      transactionType: 'group_delete',
+      userId: actingUserId,
+    });
+    return textResult(`Deleted group #${target.id}: ${target.name} (items are now ungrouped).`);
+  }
+
+  if (name === 'delete_shopping_item') {
+    let row: any;
+    if (typeof args.id === 'number' && args.id > 0) {
+      row = db
+        .prepare(
+          `SELECT sl.id, COALESCE(p.name, sl.note, 'Item') AS label
+           FROM shopping_list sl LEFT JOIN products p ON p.id = sl.product_id WHERE sl.id = ?`
+        )
+        .get(args.id);
+    } else if (typeof args.name === 'string' && args.name.trim()) {
+      const q = args.name.trim();
+      row = db
+        .prepare(
+          `SELECT sl.id, COALESCE(p.name, sl.note, 'Item') AS label
+           FROM shopping_list sl LEFT JOIN products p ON p.id = sl.product_id
+           WHERE LOWER(COALESCE(p.name, sl.note, '')) = LOWER(?)
+              OR LOWER(COALESCE(p.name, sl.note, '')) LIKE LOWER(?)
+           ORDER BY sl.id DESC LIMIT 1`
+        )
+        .get(q, `%${q}%`);
+    }
+    if (!row) return textResult('Shopping list item not found.', true);
+    db.prepare('DELETE FROM shopping_list WHERE id = ?').run(row.id);
+    return textResult(`Removed from shopping list (#${row.id}): ${row.label}`);
+  }
+
+  if (name === 'delete_item') {
+    let target: { id: number; name: string; picture_file_name: string | null; storage_photo_file_name: string | null } | undefined;
+    if (typeof args.id === 'number' && args.id > 0) {
+      target = db
+        .prepare('SELECT id, name, picture_file_name, storage_photo_file_name FROM products WHERE id = ?')
+        .get(args.id) as any;
+    } else if (typeof args.name === 'string' && args.name.trim()) {
+      target = db
+        .prepare('SELECT id, name, picture_file_name, storage_photo_file_name FROM products WHERE LOWER(name) = LOWER(?) LIMIT 1')
+        .get(args.name.trim()) as any;
+    }
+    if (!target) return textResult('Product not found. Provide exact id or name.', true);
+    db.prepare('DELETE FROM products WHERE id = ?').run(target.id);
+    service.cleanupPhotoIfUnused(target.picture_file_name);
+    service.cleanupPhotoIfUnused(target.storage_photo_file_name);
+    service.logActivity({
+      productId: null,
+      itemLabel: target.name,
+      amount: 0,
+      transactionType: 'product_delete',
+      userId: actingUserId,
+    });
+    return textResult(`Deleted product #${target.id}: ${target.name}`);
   }
 
   return textResult(`Unknown tool: ${name}`, true);

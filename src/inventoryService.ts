@@ -1083,21 +1083,25 @@ export class InventoryService {
     return { product_id: productId, removed: Array.from(filesToCheck) };
   }
 
-  getMcpSettings(): { read_enabled: boolean; write_enabled: boolean } {
+  getMcpSettings(): { read_enabled: boolean; write_enabled: boolean; delete_enabled: boolean } {
     const rows = this.db
-      .prepare("SELECT key, value FROM server_settings WHERE key IN ('mcp_read_enabled', 'mcp_write_enabled')")
+      .prepare(
+        "SELECT key, value FROM server_settings WHERE key IN ('mcp_read_enabled', 'mcp_write_enabled', 'mcp_delete_enabled')"
+      )
       .all() as Array<{ key: string; value: string }>;
     const map = new Map(rows.map((r) => [r.key, r.value]));
     return {
       read_enabled: map.get('mcp_read_enabled') !== '0',
       write_enabled: map.get('mcp_write_enabled') === '1',
+      delete_enabled: map.get('mcp_delete_enabled') === '1',
     };
   }
 
   updateMcpSettings(payload: {
     read_enabled?: boolean;
     write_enabled?: boolean;
-  }): { read_enabled: boolean; write_enabled: boolean } {
+    delete_enabled?: boolean;
+  }): { read_enabled: boolean; write_enabled: boolean; delete_enabled: boolean } {
     const upsert = this.db.prepare(
       `INSERT INTO server_settings (key, value, updated_at)
        VALUES (?, ?, datetime('now'))
@@ -1108,6 +1112,9 @@ export class InventoryService {
     }
     if (typeof payload.write_enabled === 'boolean') {
       upsert.run('mcp_write_enabled', payload.write_enabled ? '1' : '0');
+    }
+    if (typeof payload.delete_enabled === 'boolean') {
+      upsert.run('mcp_delete_enabled', payload.delete_enabled ? '1' : '0');
     }
     return this.getMcpSettings();
   }

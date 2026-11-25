@@ -354,9 +354,10 @@ export function initDatabase(dataDir: string): DbContext {
     }
   }
 
-  // Seed default MCP permission settings (Read ON, Write OFF by default)
+  // Seed default MCP permission settings (Read ON, Write OFF, Delete OFF by default)
   db.prepare("INSERT OR IGNORE INTO server_settings (key, value) VALUES ('mcp_read_enabled', '1')").run();
   db.prepare("INSERT OR IGNORE INTO server_settings (key, value) VALUES ('mcp_write_enabled', '0')").run();
+  db.prepare("INSERT OR IGNORE INTO server_settings (key, value) VALUES ('mcp_delete_enabled', '0')").run();
 
   return { db, dataDir, photosDir, initialApiKey, initialAdminPassword };
 }

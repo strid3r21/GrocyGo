@@ -415,7 +415,7 @@ export function renderWebUiHtml(): string {
             </div>
 
             <div class="row" style="gap:10px;">
-              <div class="field" style="flex:1.3;">
+              <div class="field" style="flex:1.2;">
                 <label for="labelSubInput">Note / Date (optional)</label>
                 <input id="labelSubInput" placeholder="e.g. Made 2026-11-25" />
               </div>
@@ -426,15 +426,23 @@ export function renderWebUiHtml(): string {
                   <option value="1x2">1&Prime; &times; 2&Prime; (Portrait)</option>
                 </select>
               </div>
-              <div class="field" style="width:76px;">
-                <label for="labelCopiesInput">Copies</label>
+            </div>
+
+            <div class="row" style="gap:10px;">
+              <div class="field" style="flex:1;">
+                <label for="labelBatchInput">Unique Codes (Batch Qty)</label>
+                <input id="labelBatchInput" type="number" min="1" max="50" value="1" />
+              </div>
+              <div class="field" style="flex:1;">
+                <label for="labelCopiesInput">Copies per Code (Copy Qty)</label>
                 <input id="labelCopiesInput" type="number" min="1" max="20" value="1" />
               </div>
             </div>
 
             <div class="label-preview-stage">
               <div id="labelPreviewCard" class="label-card-2x1"></div>
-              <div class="muted" style="font-size:12px;">Live preview (prints exact 2&Prime;&times;1&Prime; / 1&Prime;&times;2&Prime; vector SVG)</div>
+              <div id="labelBatchSummary" class="muted" style="font-size:12px;">Live preview (prints exact 2&Prime;&times;1&Prime; / 1&Prime;&times;2&Prime; vector SVG)</div>
+              <div id="labelBatchList" class="row hidden" style="justify-content:center;gap:6px;max-height:84px;overflow-y:auto;"></div>
             </div>
 
             <button id="printLabelBtn" class="primary" style="width:100%;" type="button">Print 1&Prime; &times; 2&Prime; Label</button>
@@ -612,6 +620,13 @@ export function renderWebUiHtml(): string {
               <div>
                 <strong>Allow Write Access</strong>
                 <div class="muted" style="font-size:13px;">AI can create groups, assign items to groups, edit item details, and add items to the shopping list.</div>
+              </div>
+            </label>
+            <label class="row" style="align-items:flex-start;cursor:pointer;padding-top:10px;border-top:1px solid var(--border);">
+              <input id="mcpDeleteToggle" type="checkbox" style="min-height:auto;width:20px;height:20px;margin-top:2px;" />
+              <div>
+                <strong>Allow Delete Access</strong>
+                <div class="muted" style="font-size:13px;">AI can delete product groups, shopping list entries, or products. Kept separate from Write for safety.</div>
               </div>
             </label>
           </div>
@@ -1109,23 +1124,29 @@ export function renderWebUiHtml(): string {
         : '<div class="muted">No backups yet. Click Back Up Now to create one.</div>';
 
       // MCP & Keys
-      const mcp = state.mcpSettings || { read_enabled: true, write_enabled: false };
+      const mcp = state.mcpSettings || { read_enabled: true, write_enabled: false, delete_enabled: false };
       const isAdmin = currentUser && currentUser.role === 'admin';
       const readChk = document.getElementById('mcpReadToggle');
       const writeChk = document.getElementById('mcpWriteToggle');
+      const deleteChk = document.getElementById('mcpDeleteToggle');
       readChk.checked = Boolean(mcp.read_enabled);
       writeChk.checked = Boolean(mcp.write_enabled);
+      deleteChk.checked = Boolean(mcp.delete_enabled);
       readChk.disabled = !isAdmin;
       writeChk.disabled = !isAdmin;
+      deleteChk.disabled = !isAdmin;
       document.getElementById('mcpAdminNote').classList.toggle('hidden', Boolean(isAdmin));
       document.getElementById('mcpBadges').innerHTML =
         '<span class="tag">' + (mcp.read_enabled ? 'Read: ON' : 'Read: OFF') + '</span>' +
-        '<span class="tag" style="' + (mcp.write_enabled ? 'background:var(--accent-soft);color:var(--accent);font-weight:700;' : '') + '">' +
-        (mcp.write_enabled ? 'Write: ON' : 'Write: OFF') + '</span>';
+        '<span class="tag" style="' + (mcp.write_enabled ? 'background:var(--primary-soft);color:var(--primary);font-weight:700;' : '') + '">' +
+        (mcp.write_enabled ? 'Write: ON' : 'Write: OFF') + '</span>' +
+        '<span class="tag ' + (mcp.delete_enabled ? 'bad' : '') + '">' +
+        (mcp.delete_enabled ? 'Delete: ON' : 'Delete: OFF') + '</span>';
 
       const enabledTools = [];
       if (mcp.read_enabled) enabledTools.push('inventory_summary', 'search_inventory', 'get_item', 'list_locations', 'list_groups', 'get_shopping_list', 'recent_activity');
       if (mcp.write_enabled) enabledTools.push('create_group', 'assign_items_to_group', 'update_item', 'add_to_shopping_list');
+      if (mcp.delete_enabled) enabledTools.push('delete_group', 'delete_shopping_item', 'delete_item');
       document.getElementById('mcpActiveTools').innerHTML = enabledTools.length
         ? '<strong>Active MCP tools (' + enabledTools.length + '):</strong> ' + enabledTools.map((t) => '<code>' + t + '</code>').join(', ')
         : '<strong>All MCP tools are currently disabled.</strong>';
@@ -1512,7 +1533,9 @@ export function renderWebUiHtml(): string {
       btn.onclick = () => switchTab(btn.dataset.tab);
     });
 
-    // ─── 1" x 2" Label Creator & Matching Item Creation ───
+    // ─── 1" x 2" Label Creator (Batch Unique Codes + Copies per Code) ───
+    let labelBatchCodes = [];
+
     function generateLabelCode() {
       const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
       const bytes = new Uint8Array(6);
@@ -1520,6 +1543,36 @@ export function renderWebUiHtml(): string {
       let out = 'GG-';
       for (let i = 0; i < bytes.length; i++) out += alphabet[bytes[i] % alphabet.length];
       return out;
+    }
+
+    function syncBatchCodes(forceRegenerate = false) {
+      const batchQty = Math.min(50, Math.max(1, Number(document.getElementById('labelBatchInput').value) || 1));
+      const existingSet = new Set((state.barcodes || []).map((b) => String(b.barcode || '').toUpperCase()));
+      const primary = document.getElementById('labelCodeInput').value.trim();
+
+      if (forceRegenerate || labelBatchCodes.length === 0) {
+        labelBatchCodes = [];
+        if (!forceRegenerate && primary) labelBatchCodes.push(primary);
+      } else if (primary) {
+        labelBatchCodes[0] = primary;
+      }
+
+      const used = new Set(labelBatchCodes.map((c) => c.toUpperCase()));
+      while (labelBatchCodes.length < batchQty) {
+        let candidate = generateLabelCode();
+        let guard = 0;
+        while ((used.has(candidate) || existingSet.has(candidate)) && guard < 20) {
+          candidate = generateLabelCode();
+          guard++;
+        }
+        used.add(candidate);
+        labelBatchCodes.push(candidate);
+      }
+      labelBatchCodes = labelBatchCodes.slice(0, batchQty);
+      if (labelBatchCodes[0] && document.getElementById('labelCodeInput').value.trim() !== labelBatchCodes[0]) {
+        document.getElementById('labelCodeInput').value = labelBatchCodes[0];
+      }
+      return labelBatchCodes;
     }
 
     function getLabelSvgUrl(code, format) {
@@ -1530,14 +1583,43 @@ export function renderWebUiHtml(): string {
     }
 
     function renderLabelPreview() {
-      const code = document.getElementById('labelCodeInput').value.trim() || 'GG-SAMPLE';
+      const codes = syncBatchCodes(false);
+      const code = codes[0] || 'GG-SAMPLE';
       const format = document.getElementById('labelFormatSelect').value;
       const title = document.getElementById('labelTitleInput').value.trim();
       const sub = document.getElementById('labelSubInput').value.trim();
       const orient = document.getElementById('labelOrientSelect').value;
+      const copies = Math.min(20, Math.max(1, Number(document.getElementById('labelCopiesInput').value) || 1));
+      const totalLabels = codes.length * copies;
+
       const card = document.getElementById('labelPreviewCard');
       const linkedCodeEl = document.getElementById('lblItemCode');
       if (linkedCodeEl) linkedCodeEl.value = code;
+
+      const summaryEl = document.getElementById('labelBatchSummary');
+      if (summaryEl) {
+        summaryEl.textContent = codes.length > 1
+          ? 'Previewing #1 of ' + codes.length + ' unique codes · ' + copies + ' ' + (copies === 1 ? 'copy' : 'copies') + ' each = ' + totalLabels + ' labels total'
+          : 'Live preview · ' + copies + ' ' + (copies === 1 ? 'label' : 'copies') + ' (' + (orient === '1x2' ? '1"×2"' : '2"×1"') + ' vector SVG)';
+      }
+
+      const printBtn = document.getElementById('printLabelBtn');
+      if (printBtn) {
+        printBtn.textContent = totalLabels > 1
+          ? 'Print ' + totalLabels + ' Labels (' + codes.length + ' unique × ' + copies + ' each)'
+          : 'Print 1" × 2" Label';
+      }
+
+      const listEl = document.getElementById('labelBatchList');
+      if (listEl) {
+        if (codes.length > 1) {
+          listEl.classList.remove('hidden');
+          listEl.innerHTML = codes.map((c) => '<span class="tag" style="font-family:monospace;">' + escapeHtml(c) + '</span>').join('');
+        } else {
+          listEl.classList.add('hidden');
+          listEl.innerHTML = '';
+        }
+      }
 
       card.className = orient === '1x2' ? 'label-card-1x2' : 'label-card-2x1';
       const imgUrl = getLabelSvgUrl(code, format);
@@ -1574,11 +1656,11 @@ export function renderWebUiHtml(): string {
 
     document.getElementById('genLabelCodeBtn').onclick = () => {
       document.getElementById('labelExistingProd').value = '';
-      document.getElementById('labelCodeInput').value = generateLabelCode();
       document.getElementById('labelItemStatus').className = 'hidden';
+      syncBatchCodes(true);
       renderLabelPreview();
     };
-    ['labelCodeInput', 'labelFormatSelect', 'labelTitleInput', 'labelSubInput', 'labelOrientSelect'].forEach((id) => {
+    ['labelCodeInput', 'labelFormatSelect', 'labelTitleInput', 'labelSubInput', 'labelOrientSelect', 'labelBatchInput', 'labelCopiesInput'].forEach((id) => {
       const el = document.getElementById(id);
       el.oninput = () => {
         if (id === 'labelTitleInput') {
@@ -1592,18 +1674,21 @@ export function renderWebUiHtml(): string {
     document.getElementById('labelExistingProd').onchange = () => {
       const pid = Number(document.getElementById('labelExistingProd').value);
       if (!pid) {
-        document.getElementById('labelCodeInput').value = generateLabelCode();
         document.getElementById('labelTitleInput').value = '';
         document.getElementById('lblItemName').value = '';
+        syncBatchCodes(true);
         renderLabelPreview();
         return;
       }
       const prod = state.products.find((p) => p.id === pid);
       const existingBc = state.barcodes.find((b) => b.product_id === pid);
+      document.getElementById('labelBatchInput').value = '1';
       if (prod) {
         document.getElementById('labelTitleInput').value = prod.name;
         document.getElementById('lblItemName').value = prod.name;
-        document.getElementById('labelCodeInput').value = existingBc ? existingBc.barcode : generateLabelCode();
+        const c = existingBc ? existingBc.barcode : generateLabelCode();
+        labelBatchCodes = [c];
+        document.getElementById('labelCodeInput').value = c;
       }
       renderLabelPreview();
     };
@@ -1619,31 +1704,49 @@ export function renderWebUiHtml(): string {
     };
 
     document.getElementById('printLabelBtn').onclick = async () => {
-      const code = document.getElementById('labelCodeInput').value.trim();
-      if (!code) { alert('Enter or generate a label code first.'); return; }
+      const codes = syncBatchCodes(false);
+      if (!codes.length) { alert('Enter or generate a label code first.'); return; }
       const format = document.getElementById('labelFormatSelect').value;
       const title = document.getElementById('labelTitleInput').value.trim();
       const sub = document.getElementById('labelSubInput').value.trim();
       const orient = document.getElementById('labelOrientSelect').value;
       const copies = Math.min(20, Math.max(1, Number(document.getElementById('labelCopiesInput').value) || 1));
 
-      const svgRes = await fetch(getLabelSvgUrl(code, format));
-      if (!svgRes.ok) { alert('Could not render label graphic.'); return; }
-      const svgMarkup = await svgRes.text();
+      const btn = document.getElementById('printLabelBtn');
+      btn.disabled = true;
+      let svgs = [];
+      try {
+        svgs = await Promise.all(
+          codes.map(async (c) => {
+            const r = await fetch(getLabelSvgUrl(c, format));
+            if (!r.ok) throw new Error('Could not render label for ' + c);
+            return { code: c, svg: await r.text() };
+          })
+        );
+      } catch (e) {
+        alert(e.message);
+        btn.disabled = false;
+        return;
+      } finally {
+        btn.disabled = false;
+      }
 
       const pageW = orient === '1x2' ? '1in' : '2in';
       const pageH = orient === '1x2' ? '2in' : '1in';
 
-      const singleLabelHtml = format === 'qr'
-        ? (orient === '1x2'
-          ? \`<div class="lbl portrait"><div class="qr-box">\${svgMarkup}</div><div class="meta">\${title ? '<div class="t">' + escapeHtml(title) + '</div>' : ''}\${sub ? '<div class="s">' + escapeHtml(sub) + '</div>' : ''}<div class="c">\${escapeHtml(code)}</div></div></div>\`
-          : \`<div class="lbl landscape"><div class="qr-box">\${svgMarkup}</div><div class="meta"><div class="t">\${escapeHtml(title || 'GrocyGo')}</div>\${sub ? '<div class="s">' + escapeHtml(sub) + '</div>' : ''}<div class="c">\${escapeHtml(code)}</div></div></div>\`)
-        : \`<div class="lbl bar">\${title ? '<div class="t">' + escapeHtml(title) + '</div>' : ''}<div class="bar-box">\${svgMarkup}</div>\${sub ? '<div class="s">' + escapeHtml(sub) + '</div>' : ''}</div>\`;
+      const pagesArr = [];
+      for (const entry of svgs) {
+        const oneHtml = format === 'qr'
+          ? (orient === '1x2'
+            ? \`<div class="lbl portrait"><div class="qr-box">\${entry.svg}</div><div class="meta">\${title ? '<div class="t">' + escapeHtml(title) + '</div>' : ''}\${sub ? '<div class="s">' + escapeHtml(sub) + '</div>' : ''}<div class="c">\${escapeHtml(entry.code)}</div></div></div>\`
+            : \`<div class="lbl landscape"><div class="qr-box">\${entry.svg}</div><div class="meta"><div class="t">\${escapeHtml(title || 'GrocyGo')}</div>\${sub ? '<div class="s">' + escapeHtml(sub) + '</div>' : ''}<div class="c">\${escapeHtml(entry.code)}</div></div></div>\`)
+          : \`<div class="lbl bar">\${title ? '<div class="t">' + escapeHtml(title) + '</div>' : ''}<div class="bar-box">\${entry.svg}</div>\${sub ? '<div class="s">' + escapeHtml(sub) + '</div>' : ''}</div>\`;
+        for (let k = 0; k < copies; k++) pagesArr.push(oneHtml);
+      }
 
-      const pages = Array.from({ length: copies }, () => singleLabelHtml).join('');
-      const win = window.open('', '_blank', 'width=440,height=320');
+      const win = window.open('', '_blank', 'width=440,height=340');
       if (!win) { alert('Allow popups for this site to open the 1"x2" label print sheet.'); return; }
-      win.document.write(\`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Label \${escapeHtml(code)}</title><style>
+      win.document.write(\`<!DOCTYPE html><html><head><meta charset="utf-8"><title>GrocyGo Labels (\${pagesArr.length})</title><style>
         @page { size: \${pageW} \${pageH}; margin: 0; }
         * { box-sizing: border-box; }
         html, body { margin: 0; padding: 0; background: #fff; color: #000; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
@@ -1660,7 +1763,7 @@ export function renderWebUiHtml(): string {
         .t { font-size: 9pt; font-weight: 700; line-height: 1.15; word-break: break-word; }
         .s { font-size: 7pt; color: #222; margin-top: 2px; }
         .c { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 7.5pt; font-weight: 700; margin-top: 3px; }
-      </style></head><body>\${pages}<script>window.onload = function(){ setTimeout(function(){ window.print(); }, 150); };<\\/script></body></html>\`);
+      </style></head><body>\${pagesArr.join('')}<script>window.onload = function(){ setTimeout(function(){ window.print(); }, 180); };<\\/script></body></html>\`);
       win.document.close();
     };
 
@@ -1742,10 +1845,11 @@ export function renderWebUiHtml(): string {
           body: JSON.stringify({
             read_enabled: document.getElementById('mcpReadToggle').checked,
             write_enabled: document.getElementById('mcpWriteToggle').checked,
+            delete_enabled: document.getElementById('mcpDeleteToggle').checked,
           }),
         });
         st.className = 'notice';
-        st.textContent = 'MCP permissions updated (Read: ' + (state.mcpSettings.read_enabled ? 'ON' : 'OFF') + ', Write: ' + (state.mcpSettings.write_enabled ? 'ON' : 'OFF') + ').';
+        st.textContent = 'MCP permissions updated (Read: ' + (state.mcpSettings.read_enabled ? 'ON' : 'OFF') + ', Write: ' + (state.mcpSettings.write_enabled ? 'ON' : 'OFF') + ', Delete: ' + (state.mcpSettings.delete_enabled ? 'ON' : 'OFF') + ').';
         renderAll();
       } catch (e) {
         st.className = 'notice err';
@@ -1755,6 +1859,7 @@ export function renderWebUiHtml(): string {
     }
     document.getElementById('mcpReadToggle').onchange = saveMcpSettings;
     document.getElementById('mcpWriteToggle').onchange = saveMcpSettings;
+    document.getElementById('mcpDeleteToggle').onchange = saveMcpSettings;
 
     document.getElementById('createKeyBtn').onclick = async () => {
       await api('/api/objects/api_keys', { method: 'POST', body: JSON.stringify({ description: 'Generated from Web UI' }) });

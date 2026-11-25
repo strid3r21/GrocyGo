@@ -195,7 +195,7 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
       }
 
       if (method === 'GET' && pathname === '/api/health') {
-        sendJson(res, 200, { ok: true, service: 'grocygo-server', version: '1.6.0' });
+        sendJson(res, 200, { ok: true, service: 'grocygo-server', version: '1.7.0' });
         return;
       }
 
@@ -334,6 +334,8 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
           const updated = service.updateMcpSettings({
             read_enabled: typeof body.read_enabled === 'boolean' ? body.read_enabled : undefined,
             write_enabled: typeof body.write_enabled === 'boolean' ? body.write_enabled : undefined,
+            delete_enabled:
+              typeof body.delete_enabled === 'boolean' ? body.delete_enabled : undefined,
           });
           sendJson(res, 200, updated);
           return;
@@ -371,7 +373,7 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
         const mcpPerms = service.getMcpSettings();
         sendJson(res, 200, {
           grocy_version: {
-            Version: 'GrocyGo-Server 1.6.0',
+            Version: 'GrocyGo-Server 1.7.0',
             ReleaseDate: '2026-11-25',
           },
           php_version: `Node ${process.version}`,
@@ -391,6 +393,7 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
             mcp_endpoint: '/mcp',
             mcp_read_enabled: mcpPerms.read_enabled,
             mcp_write_enabled: mcpPerms.write_enabled,
+            mcp_delete_enabled: mcpPerms.delete_enabled,
           },
         });
         return;

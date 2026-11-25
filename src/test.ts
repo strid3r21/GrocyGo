@@ -656,7 +656,44 @@ async function runTests() {
       false
     );
 
-    console.log('ALL SERVER v1.6.0 TESTS PASSED!');
+    // 20. Separate MCP Delete Permission (OFF by default even when Write is ON)
+    await fetch(`${base}/api/mcp/settings`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ read_enabled: true, write_enabled: true, delete_enabled: false }),
+    });
+    const writeNoDelTools = await mcpCall(30, 'tools/list');
+    assert.equal(writeNoDelTools.result.tools.length, 11);
+    const blockedDelete = await mcpCall(31, 'tools/call', {
+      name: 'delete_group',
+      arguments: { group_name: 'Dry Goods' },
+    });
+    assert.equal(blockedDelete.result.isError, true);
+    assert.ok(blockedDelete.result.content[0].text.includes('Delete'));
+
+    // Enable Delete separately -> 14 tools exposed & delete_group succeeds
+    await fetch(`${base}/api/mcp/settings`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ delete_enabled: true }),
+    });
+    const allMcpTools = await mcpCall(32, 'tools/list');
+    assert.equal(allMcpTools.result.tools.length, 14);
+    const deletedGrp = await mcpCall(33, 'tools/call', {
+      name: 'delete_group',
+      arguments: { group_name: 'Dry Goods' },
+    });
+    assert.ok(!deletedGrp.result.isError);
+    assert.ok(deletedGrp.result.content[0].text.includes('Deleted group'));
+
+    // Turn Delete back OFF
+    await fetch(`${base}/api/mcp/settings`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ write_enabled: false, delete_enabled: false }),
+    });
+
+    console.log('ALL SERVER v1.7.0 TESTS PASSED!');
     console.log('\nSample compact MCP inventory_summary output:\n' + summaryText);
     console.log('\nSample compact MCP search_inventory output:\n' + searchText);
   } finally {
