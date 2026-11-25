@@ -2,7 +2,9 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
+import QRCode from 'qrcode';
 import { DbContext } from './db';
+import { importFromGrocyApi, importFromGrocySqliteBuffer } from './grocyImport';
 import { InventoryService } from './inventoryService';
 import { handleMcpJsonRpc } from './mcp';
 import {
@@ -208,9 +210,55 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
             food_inventory: true,
             shopping_list: true,
             storage_photos: true,
+            grocy_import: true,
+            qr_codes: true,
             mcp_endpoint: '/mcp',
           },
         });
+        return;
+      }
+
+      // ─── QR Code SVG Generator (Offline, Grocy Mobile Format) ─
+      if (method === 'GET' && pathname === '/api/qr') {
+        const text = url.searchParams.get('text') || '';
+        if (!text.trim() || text.length > 1024) {
+          sendError(res, 400, 'Missing or overly long text query parameter');
+          return;
+        }
+        const svg = await QRCode.toString(text, {
+          type: 'svg',
+          margin: 2,
+          errorCorrectionLevel: 'M',
+          color: { dark: '#1E2420', light: '#FCFBF8' },
+        });
+        res.writeHead(200, {
+          'Content-Type': 'image/svg+xml; charset=utf-8',
+          'Cache-Control': 'no-store',
+          'Access-Control-Allow-Origin': '*',
+        });
+        res.end(svg);
+        return;
+      }
+
+      // ─── Import from Original Grocy (Live API or SQLite DB) ───
+      if (method === 'POST' && pathname === '/api/import/grocy-api') {
+        const body = await readJsonBody(req);
+        const report = await importFromGrocyApi(ctx, {
+          serverUrl: String(body.server_url || body.serverUrl || ''),
+          apiKey: String(body.api_key || body.apiKey || ''),
+          clearExisting: Boolean(body.clear_existing),
+          importPhotos: body.import_photos !== false,
+        });
+        sendJson(res, 200, report);
+        return;
+      }
+
+      if (method === 'POST' && pathname === '/api/import/grocy-db') {
+        const clearExisting = url.searchParams.get('clear_existing') === '1';
+        // Allow up to 60 MB SQLite file upload
+        const dbBuf = await readBodyBuffer(req, 60 * 1024 * 1024);
+        const report = await importFromGrocySqliteBuffer(ctx, dbBuf, { clearExisting });
+        sendJson(res, 200, report);
         return;
       }
 

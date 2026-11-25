@@ -7,13 +7,14 @@ RUN npm run build
 
 FROM node:24-slim
 LABEL org.opencontainers.image.source="https://github.com/strid3r21/GrocyGo"
-LABEL org.opencontainers.image.description="Lightweight Food Inventory & Shopping List server with Product + Shelf Photos and built-in MCP server"
+LABEL org.opencontainers.image.description="Lightweight Food Inventory & Shopping List server with Product + Shelf Photos, Grocy Importer, QR Onboarding, and built-in MCP server"
 WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=9283
 ENV DATA_DIR=/data
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
 COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/package.json ./package.json
 VOLUME ["/data"]
 EXPOSE 9283
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \

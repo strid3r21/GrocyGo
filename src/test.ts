@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { initDatabase } from './db';
 import { createRequestHandler } from './grocyApi';
 import { InventoryService } from './inventoryService';
@@ -184,7 +185,117 @@ async function runTests() {
     });
     assert.ok(shopMcp.result.content[0].text.includes('[ ] Organic Whole Milk'));
 
-    console.log('ALL SERVER + PHOTO + SHOPPING LIST + MCP TESTS PASSED!');
+    // 9. QR Code SVG endpoint
+    const qrRes = await fetch(
+      `${base}/api/qr?text=${encodeURIComponent('https://grocygo.example.com/api|test_secret_key_123')}`,
+      { headers }
+    );
+    assert.equal(qrRes.status, 200);
+    assert.ok((qrRes.headers.get('content-type') || '').includes('image/svg+xml'));
+    const qrSvg = await qrRes.text();
+    assert.ok(qrSvg.includes('<svg'));
+
+    // 10. Import from original Grocy via Live API (mock server with photo)
+    const mockGrocy = http.createServer((req, res) => {
+      if (req.headers['grocy-api-key'] !== 'old_key') {
+        res.writeHead(401);
+        res.end('{}');
+        return;
+      }
+      if (req.url?.startsWith('/api/files/productpictures/')) {
+        res.writeHead(200, { 'Content-Type': 'image/jpeg' });
+        res.end(fakeJpeg);
+        return;
+      }
+      const routes: Record<string, any[]> = {
+        '/api/objects/locations': [{ id: 10, name: 'Basement Shelf', description: 'Bulk', is_freezer: 0 }],
+        '/api/objects/quantity_units': [{ id: 20, name: 'Tub', name_plural: 'Tubs' }],
+        '/api/objects/product_groups': [{ id: 30, name: 'Breakfast' }],
+        '/api/objects/shopping_locations': [{ id: 40, name: 'Costco' }],
+        '/api/objects/products': [
+          {
+            id: 100,
+            name: 'Rolled Oats',
+            location_id: 10,
+            qu_id_purchase: 20,
+            qu_id_stock: 20,
+            product_group_id: 30,
+            shopping_location_id: 40,
+            picture_file_name: 'oats.jpg',
+          },
+        ],
+        '/api/objects/product_barcodes': [{ id: 1, product_id: 100, barcode: '999888777666' }],
+        '/api/objects/stock': [
+          {
+            id: 1,
+            product_id: 100,
+            amount: 3,
+            best_before_date: '2027-06-01',
+            stock_id: 'legacy-oats-1',
+            location_id: 10,
+          },
+        ],
+        '/api/objects/shopping_list': [{ id: 1, product_id: 100, amount: 2, done: 0 }],
+      };
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(routes[req.url || ''] || []));
+    });
+    await new Promise<void>((r) => mockGrocy.listen(0, '127.0.0.1', r));
+    const mockPort = (mockGrocy.address() as any).port;
+    try {
+      const apiImportReport = await fetch(`${base}/api/import/grocy-api`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          server_url: `http://127.0.0.1:${mockPort}`,
+          api_key: 'old_key',
+          import_photos: true,
+        }),
+      }).then((r) => r.json());
+      assert.equal(apiImportReport.locations, 1);
+      assert.equal(apiImportReport.products, 1);
+      assert.equal(apiImportReport.barcodes, 1);
+      assert.equal(apiImportReport.stock_entries, 1);
+      assert.equal(apiImportReport.photos, 1);
+      assert.equal(apiImportReport.shopping_list, 1);
+    } finally {
+      mockGrocy.close();
+    }
+
+    // 11. Import from original Grocy SQLite grocy.db upload
+    const fakeGrocyDbPath = path.join(tmpDir, 'legacy-grocy.db');
+    const legacyDb = new DatabaseSync(fakeGrocyDbPath);
+    legacyDb.exec(`
+      CREATE TABLE locations (id INTEGER PRIMARY KEY, name TEXT, description TEXT, is_freezer INTEGER);
+      CREATE TABLE quantity_units (id INTEGER PRIMARY KEY, name TEXT, name_plural TEXT, description TEXT);
+      CREATE TABLE product_groups (id INTEGER PRIMARY KEY, name TEXT, description TEXT);
+      CREATE TABLE shopping_locations (id INTEGER PRIMARY KEY, name TEXT, description TEXT);
+      CREATE TABLE products (id INTEGER PRIMARY KEY, name TEXT, description TEXT, location_id INTEGER, qu_id_purchase INTEGER, qu_id_stock INTEGER, min_stock_amount REAL, default_best_before_days INTEGER);
+      CREATE TABLE product_barcodes (id INTEGER PRIMARY KEY, product_id INTEGER, barcode TEXT);
+      CREATE TABLE stock (id INTEGER PRIMARY KEY, product_id INTEGER, amount REAL, best_before_date TEXT, stock_id TEXT, location_id INTEGER);
+      CREATE TABLE shopping_list (id INTEGER PRIMARY KEY, product_id INTEGER, note TEXT, amount REAL, done INTEGER);
+      INSERT INTO locations VALUES (5, 'Spice Cabinet', 'Above stove', 0);
+      INSERT INTO quantity_units VALUES (7, 'Shaker', 'Shakers', '');
+      INSERT INTO products VALUES (55, 'Smoked Paprika', 'Spanish', 5, 7, 7, 1, 365);
+      INSERT INTO product_barcodes VALUES (1, 55, '444555666777');
+      INSERT INTO stock VALUES (1, 55, 2, '2028-01-01', 'paprika-batch-1', 5);
+      INSERT INTO shopping_list VALUES (1, NULL, 'Fresh Basil', 1, 0);
+    `);
+    legacyDb.close();
+
+    const dbBytes = fs.readFileSync(fakeGrocyDbPath);
+    const dbImportReport = await fetch(`${base}/api/import/grocy-db`, {
+      method: 'POST',
+      headers: { 'GROCY-API-KEY': 'test_secret_key_123', 'Content-Type': 'application/octet-stream' },
+      body: dbBytes,
+    }).then((r) => r.json());
+    assert.equal(dbImportReport.locations, 1);
+    assert.equal(dbImportReport.products, 1);
+    assert.equal(dbImportReport.barcodes, 1);
+    assert.equal(dbImportReport.stock_entries, 1);
+    assert.equal(dbImportReport.shopping_list, 1);
+
+    console.log('ALL SERVER + PHOTO + SHOPPING LIST + MCP + QR + GROCY IMPORT TESTS PASSED!');
     console.log('\nSample compact MCP inventory_summary output:\n' + summaryText);
     console.log('\nSample compact MCP search_inventory output:\n' + searchText);
   } finally {

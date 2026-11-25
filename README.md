@@ -5,6 +5,8 @@ Lightweight, self-hosted **Food Inventory & Shopping List** server with **Produc
 - **Zero runtime npm dependencies** (TypeScript + Node 24 built-in `node:sqlite`)
 - **Grocy-compatible REST API** for stock, locations, products, barcodes, and shopping lists
 - **Dual Photos**: stores both a **Product Photo** (the item itself) and a **Storage/Shelf Photo** (where it's stored on the shelf, per batch or product), both updatable anytime
+- **Original Grocy Importer**: migrate seamlessly via live Grocy API (including product photos!) or by uploading your existing `grocy.db` SQLite file
+- **Scannable API Key QR Codes**: generate offline QR codes right from the **API & MCP** tab to connect the GrocyGo mobile app in one scan
 - **Built-in Read-Only MCP Server (`/mcp`)** with ultra-compact 1-line-per-item responses (~85–90% fewer tokens than raw JSON)
 
 ---
