@@ -12,7 +12,7 @@
   <Category>HomeAutomation: Productivity: Tools:</Category>
   <WebUI>http://[IP]:[PORT:9283]</WebUI>
   <TemplateURL>https://raw.githubusercontent.com/strid3r21/GrocyGo/main/unraid/grocygo.xml</TemplateURL>
-  <Icon>https://raw.githubusercontent.com/strid3r21/GrocyGo/main/unraid/icon.svg</Icon>
+  <Icon>https://raw.githubusercontent.com/strid3r21/GrocyGo/main/unraid/icon.png</Icon>
   <ExtraParams/>
   <PostArgs/>
   <CPUset/>

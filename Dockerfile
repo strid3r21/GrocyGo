@@ -15,6 +15,7 @@ ENV DATA_DIR=/data
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 COPY --from=builder /app/dist ./dist
+COPY unraid/icon.png ./unraid/icon.png
 VOLUME ["/data"]
 EXPOSE 9283
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \

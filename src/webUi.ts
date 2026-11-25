@@ -4,6 +4,7 @@ export function renderWebUiHtml(): string {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" type="image/png" href="/favicon.png" />
   <title>GrocyGo — Kitchen Inventory</title>
   <style>
     :root {
@@ -218,6 +219,7 @@ export function renderWebUiHtml(): string {
 <body>
   <header>
     <div class="brand">
+      <img src="/favicon.png" alt="" style="width:28px;height:28px;border-radius:7px;" />
       <span>GrocyGo</span>
       <span id="userPill" class="tag hidden"></span>
     </div>

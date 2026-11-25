@@ -171,6 +171,20 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
         return;
       }
 
+      if (method === 'GET' && pathname === '/favicon.png') {
+        const iconPath = path.resolve(__dirname, '..', 'unraid', 'icon.png');
+        if (fs.existsSync(iconPath)) {
+          const stat = fs.statSync(iconPath);
+          res.writeHead(200, {
+            'Content-Type': 'image/png',
+            'Content-Length': stat.size,
+            'Cache-Control': 'public, max-age=86400',
+          });
+          fs.createReadStream(iconPath).pipe(res);
+          return;
+        }
+      }
+
       if (method === 'GET' && pathname === '/api/health') {
         sendJson(res, 200, { ok: true, service: 'grocygo-server', version: '1.2.0' });
         return;
