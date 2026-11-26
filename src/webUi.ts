@@ -1787,8 +1787,14 @@ export function renderWebUiHtml(): string {
         btn.disabled = false;
       }
 
+      // Label design size. The print sheet is always a 1in x 2in portrait page:
+      // browsers mark a wider-than-tall page as "landscape" and CUPS then rotates
+      // it, so a 2x1 label printed only its middle, upside down. A 2x1 label is
+      // drawn turned 90deg clockwise on the portrait sheet, and the printer's
+      // auto-rotate puts it back upright on the 2in-wide label stock.
       const pageW = orient === '1x2' ? '1in' : '2in';
       const pageH = orient === '1x2' ? '2in' : '1in';
+      const rotate = orient !== '1x2';
 
       const pagesArr = [];
       for (const entry of svgs) {
@@ -1797,17 +1803,19 @@ export function renderWebUiHtml(): string {
             ? \`<div class="lbl portrait"><div class="qr-box">\${entry.svg}</div><div class="meta">\${title ? '<div class="t">' + escapeHtml(title) + '</div>' : ''}\${sub ? '<div class="s">' + escapeHtml(sub) + '</div>' : ''}<div class="c">\${escapeHtml(entry.code)}</div></div></div>\`
             : \`<div class="lbl landscape"><div class="qr-box">\${entry.svg}</div><div class="meta"><div class="t">\${escapeHtml(title || 'GrocyGo')}</div>\${sub ? '<div class="s">' + escapeHtml(sub) + '</div>' : ''}<div class="c">\${escapeHtml(entry.code)}</div></div></div>\`)
           : \`<div class="lbl bar">\${title ? '<div class="t">' + escapeHtml(title) + '</div>' : ''}<div class="bar-box">\${entry.svg}</div>\${sub ? '<div class="s">' + escapeHtml(sub) + '</div>' : ''}</div>\`;
-        for (let k = 0; k < copies; k++) pagesArr.push(oneHtml);
+        for (let k = 0; k < copies; k++) pagesArr.push('<div class="pg">' + oneHtml + '</div>');
       }
 
       const win = window.open('', '_blank', 'width=440,height=340');
       if (!win) { alert('Allow popups for this site to open the 1"x2" label print sheet.'); return; }
       win.document.write(\`<!DOCTYPE html><html><head><meta charset="utf-8"><title>GrocyGo Labels (\${pagesArr.length})</title><style>
-        @page { size: \${pageW} \${pageH}; margin: 0; }
+        @page { size: 1in 2in; margin: 0; }
         * { box-sizing: border-box; }
         html, body { margin: 0; padding: 0; background: #fff; color: #000; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-        .lbl { width: \${pageW}; height: \${pageH}; padding: 0.06in 0.08in; overflow: hidden; page-break-after: always; break-after: page; display: flex; align-items: center; justify-content: center; }
-        .lbl:last-child { page-break-after: auto; break-after: auto; }
+        .pg { width: 1in; height: 2in; overflow: hidden; position: relative; page-break-after: always; break-after: page; }
+        .pg:last-child { page-break-after: auto; break-after: auto; }
+        .lbl { width: \${pageW}; height: \${pageH}; padding: 0.06in 0.08in; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+        \${rotate ? '.lbl { position: absolute; top: 0; left: 0; transform-origin: 0 0; transform: translate(1in, 0) rotate(90deg); }' : ''}
         .lbl.landscape { flex-direction: row; gap: 0.08in; }
         .lbl.landscape .qr-box { width: 0.84in; height: 0.84in; flex-shrink: 0; }
         .lbl.landscape .meta { flex: 1; min-width: 0; text-align: left; }
