@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { AuthUser, generateApiKey, hashPassword, verifyPassword } from './auth';
 import { DbContext } from './db';
 import { deletePhotoIfUnreferenced } from './photos';
+import { scoreReceiptItemMatch } from './receiptOcr';
 
 export const NEVER_EXPIRES = '2999-12-31';
 
@@ -39,7 +40,11 @@ export class InventoryService {
         'SELECT 1 FROM products WHERE picture_file_name = ? OR storage_photo_file_name = ? LIMIT 1'
       )
       .get(fileName, fileName);
-    return Boolean(inProducts);
+    if (inProducts) return true;
+    const inReceipts = this.db
+      .prepare('SELECT 1 FROM receipts WHERE photo_file_name = ? LIMIT 1')
+      .get(fileName);
+    return Boolean(inReceipts);
   }
 
   cleanupPhotoIfUnused(fileName: string | null | undefined): void {
@@ -570,6 +575,9 @@ export class InventoryService {
       location_id?: number;
       shopping_location_id?: number;
       stock_entry_id?: number;
+      receipt_item_id?: number;
+      store_name?: string;
+      purchased_date?: string;
       note?: string;
       photo_file_name?: string;
     },
@@ -619,6 +627,21 @@ export class InventoryService {
           note: payload.note?.trim() || '',
           userId,
         });
+
+        if (payload.receipt_item_id) {
+          this.linkReceiptItemToProduct(payload.receipt_item_id, productId, {
+            unitPrice: payload.price,
+            quantity: amount,
+          });
+        } else if (payload.price !== undefined && payload.price !== null && Number(payload.price) > 0) {
+          this.recordPriceHistory({
+            productId,
+            unitPrice: Number(payload.price),
+            quantity: amount,
+            storeName: payload.store_name || '',
+            purchasedDate: payload.purchased_date || todayIso(),
+          });
+        }
 
         return {
           id: Number(existing.id),
@@ -684,6 +707,21 @@ export class InventoryService {
       note: payload.note?.trim() || '',
       userId,
     });
+
+    if (payload.receipt_item_id) {
+      this.linkReceiptItemToProduct(payload.receipt_item_id, productId, {
+        unitPrice: payload.price,
+        quantity: amount,
+      });
+    } else if (payload.price !== undefined && payload.price !== null && Number(payload.price) > 0) {
+      this.recordPriceHistory({
+        productId,
+        unitPrice: Number(payload.price),
+        quantity: amount,
+        storeName: payload.store_name || '',
+        purchasedDate: payload.purchased_date || todayIso(),
+      });
+    }
 
     return {
       id: Number(info.lastInsertRowid),
@@ -2202,6 +2240,332 @@ export class InventoryService {
         stale_90d: staleItems.length,
       },
       stale_items: staleItems,
+    };
+  }
+
+  // ─── Receipts & Price History ─────────────────────────────────
+  createReceipt(
+    payload: {
+      store_name?: string;
+      purchase_date?: string;
+      total_amount?: number | null;
+      photo_file_name?: string | null;
+      raw_ocr_text?: string;
+      items?: Array<{
+        raw_name: string;
+        quantity?: number;
+        unit_price?: number | null;
+        total_price?: number | null;
+      }>;
+    },
+    userId?: number | null
+  ) {
+    const storeName = String(payload.store_name || '').trim();
+    const purchaseDate = String(payload.purchase_date || '').trim() || todayIso();
+    const totalAmt =
+      payload.total_amount !== undefined && payload.total_amount !== null && Number.isFinite(Number(payload.total_amount))
+        ? Math.round(Number(payload.total_amount) * 100) / 100
+        : null;
+    const photoFile = payload.photo_file_name?.trim() || null;
+    const rawOcr = String(payload.raw_ocr_text || '');
+
+    const info = this.db
+      .prepare(
+        `INSERT INTO receipts (store_name, purchase_date, total_amount, photo_file_name, raw_ocr_text, user_id)
+         VALUES (?, ?, ?, ?, ?, ?)`
+      )
+      .run(storeName, purchaseDate, totalAmt, photoFile, rawOcr, userId ?? null);
+
+    const receiptId = Number(info.lastInsertRowid);
+    const insertItem = this.db.prepare(
+      `INSERT INTO receipt_items (receipt_id, raw_name, quantity, unit_price, total_price)
+       VALUES (?, ?, ?, ?, ?)`
+    );
+
+    const cleanItems = Array.isArray(payload.items) ? payload.items : [];
+    for (const item of cleanItems) {
+      const name = String(item.raw_name || '').trim();
+      if (!name) continue;
+      const qty = Math.max(0.01, Number(item.quantity) || 1);
+      const unitP =
+        item.unit_price !== undefined && item.unit_price !== null && Number.isFinite(Number(item.unit_price))
+          ? Math.round(Number(item.unit_price) * 100) / 100
+          : item.total_price !== undefined && item.total_price !== null && Number.isFinite(Number(item.total_price))
+          ? Math.round((Number(item.total_price) / qty) * 100) / 100
+          : null;
+      const totP =
+        item.total_price !== undefined && item.total_price !== null && Number.isFinite(Number(item.total_price))
+          ? Math.round(Number(item.total_price) * 100) / 100
+          : unitP !== null
+          ? Math.round(unitP * qty * 100) / 100
+          : null;
+      insertItem.run(receiptId, name, qty, unitP, totP);
+    }
+
+    this.logActivity({
+      productId: null,
+      itemLabel: storeName || 'Receipt',
+      amount: cleanItems.length,
+      transactionType: 'receipt_create',
+      note: `${cleanItems.length} items${totalAmt !== null ? ` · $${totalAmt.toFixed(2)}` : ''}`,
+      userId,
+    });
+
+    return this.getReceipt(receiptId);
+  }
+
+  getReceipt(receiptId: number) {
+    const r = this.db.prepare('SELECT * FROM receipts WHERE id = ?').get(receiptId) as any;
+    if (!r) return null;
+    const items = this.db
+      .prepare(
+        `SELECT ri.*, p.name AS matched_product_name
+         FROM receipt_items ri
+         LEFT JOIN products p ON p.id = ri.matched_product_id
+         WHERE ri.receipt_id = ?
+         ORDER BY ri.id ASC`
+      )
+      .all(receiptId);
+    return {
+      ...r,
+      items,
+    };
+  }
+
+  listReceipts(limit = 30) {
+    const receipts = this.db
+      .prepare(
+        `SELECT r.*,
+           (SELECT COUNT(*) FROM receipt_items ri WHERE ri.receipt_id = r.id) AS item_count,
+           (SELECT COUNT(*) FROM receipt_items ri WHERE ri.receipt_id = r.id AND ri.stock_added = 0) AS unlinked_count
+         FROM receipts r
+         ORDER BY r.purchase_date DESC, r.id DESC
+         LIMIT ?`
+      )
+      .all(Math.min(100, Math.max(1, limit))) as any[];
+
+    const getItems = this.db.prepare(
+      `SELECT ri.*, p.name AS matched_product_name
+       FROM receipt_items ri
+       LEFT JOIN products p ON p.id = ri.matched_product_id
+       WHERE ri.receipt_id = ?
+       ORDER BY ri.id ASC`
+    );
+
+    return receipts.map((r) => ({
+      ...r,
+      items: getItems.all(r.id),
+    }));
+  }
+
+  deleteReceipt(receiptId: number): { deleted: boolean } {
+    const row = this.db
+      .prepare('SELECT id, photo_file_name FROM receipts WHERE id = ?')
+      .get(receiptId) as { id: number; photo_file_name: string | null } | undefined;
+    if (!row) throw new Error(`Receipt #${receiptId} not found`);
+    this.db.prepare('DELETE FROM receipts WHERE id = ?').run(receiptId);
+    if (row.photo_file_name) {
+      this.cleanupPhotoIfUnused(row.photo_file_name);
+    }
+    return { deleted: true };
+  }
+
+  getUnlinkedReceiptItems(query = '', days = 30) {
+    const safeDays = Math.max(1, Math.min(365, Math.round(Number(days) || 30)));
+    const rows = this.db
+      .prepare(
+        `SELECT
+           ri.id,
+           ri.receipt_id,
+           ri.raw_name,
+           ri.quantity,
+           ri.unit_price,
+           ri.total_price,
+           ri.matched_product_id,
+           ri.stock_added,
+           r.store_name,
+           r.purchase_date
+         FROM receipt_items ri
+         INNER JOIN receipts r ON r.id = ri.receipt_id
+         WHERE ri.stock_added = 0
+           AND r.created_at >= datetime('now', ?)
+         ORDER BY r.purchase_date DESC, ri.id DESC
+         LIMIT 150`
+      )
+      .all(`-${safeDays} days`) as any[];
+
+    const cleanQuery = query.trim();
+    if (!cleanQuery) {
+      return rows.map((row) => ({ ...row, match_score: 0 }));
+    }
+
+    return rows
+      .map((row) => ({
+        ...row,
+        match_score: scoreReceiptItemMatch(row.raw_name, cleanQuery),
+      }))
+      .sort((a, b) => {
+        if (b.match_score !== a.match_score) return b.match_score - a.match_score;
+        return String(b.purchase_date).localeCompare(String(a.purchase_date));
+      });
+  }
+
+  recordPriceHistory(payload: {
+    productId: number;
+    unitPrice: number;
+    quantity?: number;
+    totalPrice?: number | null;
+    storeName?: string;
+    purchasedDate?: string;
+    receiptId?: number | null;
+    receiptItemId?: number | null;
+  }) {
+    const unitPrice = Math.round(Number(payload.unitPrice) * 100) / 100;
+    if (!Number.isFinite(unitPrice) || unitPrice <= 0) return;
+    const qty = Math.max(0.01, Number(payload.quantity) || 1);
+    const totalPrice =
+      payload.totalPrice !== undefined && payload.totalPrice !== null && Number.isFinite(Number(payload.totalPrice))
+        ? Math.round(Number(payload.totalPrice) * 100) / 100
+        : Math.round(unitPrice * qty * 100) / 100;
+    const purchasedDate = payload.purchasedDate?.trim() || todayIso();
+
+    this.db
+      .prepare(
+        `INSERT INTO price_history (
+           product_id, receipt_id, receipt_item_id, store_name, unit_price, quantity, total_price, purchased_date
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        payload.productId,
+        payload.receiptId ?? null,
+        payload.receiptItemId ?? null,
+        (payload.storeName || '').trim(),
+        unitPrice,
+        qty,
+        totalPrice,
+        purchasedDate
+      );
+  }
+
+  linkReceiptItemToProduct(
+    receiptItemId: number,
+    productId: number,
+    overrides?: { unitPrice?: number | null; quantity?: number }
+  ) {
+    const ri = this.db
+      .prepare(
+        `SELECT ri.*, r.store_name, r.purchase_date
+         FROM receipt_items ri
+         INNER JOIN receipts r ON r.id = ri.receipt_id
+         WHERE ri.id = ?`
+      )
+      .get(receiptItemId) as any;
+    if (!ri) throw new Error(`Receipt item #${receiptItemId} not found`);
+
+    const prod = this.db.prepare('SELECT id, name FROM products WHERE id = ?').get(productId) as
+      | { id: number; name: string }
+      | undefined;
+    if (!prod) throw new Error(`Product #${productId} not found`);
+
+    this.db
+      .prepare('UPDATE receipt_items SET matched_product_id = ?, stock_added = 1 WHERE id = ?')
+      .run(productId, receiptItemId);
+
+    const unitPrice =
+      overrides?.unitPrice !== undefined && overrides.unitPrice !== null && Number(overrides.unitPrice) > 0
+        ? Number(overrides.unitPrice)
+        : ri.unit_price !== null && Number(ri.unit_price) > 0
+        ? Number(ri.unit_price)
+        : ri.total_price !== null && Number(ri.total_price) > 0
+        ? Number(ri.total_price) / Math.max(1, Number(ri.quantity || 1))
+        : null;
+
+    if (unitPrice !== null) {
+      const existingHistory = this.db
+        .prepare('SELECT id FROM price_history WHERE receipt_item_id = ? LIMIT 1')
+        .get(receiptItemId);
+      if (!existingHistory) {
+        this.recordPriceHistory({
+          productId,
+          receiptId: ri.receipt_id,
+          receiptItemId,
+          storeName: ri.store_name || '',
+          unitPrice,
+          quantity: overrides?.quantity ?? Number(ri.quantity || 1),
+          totalPrice: ri.total_price,
+          purchasedDate: ri.purchase_date || todayIso(),
+        });
+      }
+    }
+
+    return {
+      id: receiptItemId,
+      matched_product_id: productId,
+      matched_product_name: prod.name,
+      stock_added: 1,
+    };
+  }
+
+  getProductPriceHistory(productId: number) {
+    const history = this.db
+      .prepare(
+        `SELECT id, product_id, receipt_id, receipt_item_id, store_name, unit_price, quantity, total_price, purchased_date, created_at
+         FROM price_history
+         WHERE product_id = ?
+         ORDER BY purchased_date DESC, id DESC
+         LIMIT 50`
+      )
+      .all(productId) as Array<{
+      id: number;
+      product_id: number;
+      receipt_id: number | null;
+      receipt_item_id: number | null;
+      store_name: string;
+      unit_price: number;
+      quantity: number;
+      total_price: number | null;
+      purchased_date: string;
+      created_at: string;
+    }>;
+
+    if (history.length === 0) {
+      return {
+        product_id: productId,
+        count: 0,
+        latest_price: null,
+        previous_price: null,
+        min_price: null,
+        max_price: null,
+        avg_price: null,
+        price_change: null,
+        price_change_pct: null,
+        history: [],
+      };
+    }
+
+    const prices = history.map((h) => Number(h.unit_price));
+    const latest = prices[0];
+    const previous = prices.length > 1 ? prices[1] : null;
+    const min = Math.min(...prices);
+    const max = Math.max(...prices);
+    const avg = Math.round((prices.reduce((a, b) => a + b, 0) / prices.length) * 100) / 100;
+    const priceChange = previous !== null ? Math.round((latest - previous) * 100) / 100 : null;
+    const priceChangePct =
+      previous !== null && previous > 0
+        ? Math.round(((latest - previous) / previous) * 1000) / 10
+        : null;
+
+    return {
+      product_id: productId,
+      count: history.length,
+      latest_price: latest,
+      previous_price: previous,
+      min_price: min,
+      max_price: max,
+      avg_price: avg,
+      price_change: priceChange,
+      price_change_pct: priceChangePct,
+      history,
     };
   }
 

@@ -9,6 +9,7 @@ import { ensureDailyBackup, listDatabaseBackups, pruneOldBackups } from './backu
 import { initDatabase } from './db';
 import { createRequestHandler } from './grocyApi';
 import { InventoryService } from './inventoryService';
+import { parseReceiptText } from './receiptOcr';
 
 async function runTests() {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'grocygo-server-test-'));
@@ -986,7 +987,82 @@ async function runTests() {
     assert.ok(autoShopItem, 'Consuming below min_stock_amount should auto-add to shopping list');
     assert.equal(Number(autoShopItem.amount), 2);
 
-    console.log('ALL SERVER v2.0.0 TESTS PASSED!');
+    // 27. Receipt parser, receipt records, smart unlinked item suggestions & price history
+    const parsedSample = parseReceiptText(`
+      TRADER JOE'S #142
+      11/26/2026 09:15 AM
+      ORG WHOLE MILK         4.99 F
+      2 @ 3.49
+      FREE RANGE EGGS        6.98 F
+      SUBTOTAL              11.97
+      TAX                    0.00
+      TOTAL                 11.97
+    `);
+    assert.ok(parsedSample.store_name.includes('TRADER'));
+    assert.equal(parsedSample.purchase_date, '2026-11-26');
+    assert.equal(parsedSample.total_amount, 11.97);
+    assert.ok(parsedSample.items.length >= 2);
+
+    const createdReceipt = await fetch(`${base}/api/receipts`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        store_name: "Trader Joe's",
+        purchase_date: '2026-11-26',
+        total_amount: 11.97,
+        items: [
+          { raw_name: 'ORG WHOLE MILK', quantity: 1, unit_price: 4.99, total_price: 4.99 },
+          { raw_name: 'FREE RANGE EGGS', quantity: 2, unit_price: 3.49, total_price: 6.98 },
+        ],
+      }),
+    }).then((r) => r.json());
+    assert.ok(createdReceipt.id);
+    assert.equal(createdReceipt.items.length, 2);
+
+    const suggested = await fetch(
+      `${base}/api/receipts/unlinked-items?q=${encodeURIComponent('Organic Whole Milk')}`,
+      { headers }
+    ).then((r) => r.json());
+    assert.equal(suggested[0].raw_name, 'ORG WHOLE MILK', 'Smart match should rank milk first');
+    assert.ok(suggested[0].match_score >= 0.5);
+
+    // Record an earlier price, then link the newer receipt item on stock purchase to verify price history & delta
+    await fetch(`${base}/api/stock/products/${prodId}/add`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        amount: 1,
+        price: 4.49,
+        store_name: "Trader Joe's",
+        purchased_date: '2026-11-10',
+      }),
+    });
+    await fetch(`${base}/api/stock/products/${prodId}/add`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        amount: 1,
+        price: 4.99,
+        receipt_item_id: suggested[0].id,
+      }),
+    });
+
+    const priceHist = await fetch(`${base}/api/products/${prodId}/price-history`, { headers }).then((r) =>
+      r.json()
+    );
+    assert.equal(priceHist.count, 2);
+    assert.equal(priceHist.latest_price, 4.99);
+    assert.equal(priceHist.previous_price, 4.49);
+    assert.equal(priceHist.price_change, 0.5);
+    assert.ok(priceHist.price_change_pct > 10);
+
+    // Linked receipt item should no longer appear in unlinked-items
+    const remainingUnlinked = await fetch(`${base}/api/receipts/unlinked-items`, { headers }).then((r) =>
+      r.json()
+    );
+    assert.ok(!remainingUnlinked.some((ri: any) => ri.id === suggested[0].id));
+
+    console.log('ALL SERVER v2.1.0 TESTS PASSED!');
     console.log('\nSample compact MCP inventory_summary output:\n' + summaryText);
     console.log('\nSample compact MCP search_inventory output:\n' + searchText);
   } finally {

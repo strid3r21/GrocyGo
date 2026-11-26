@@ -23,6 +23,7 @@ import {
   savePhotoBase64,
   savePhotoBuffer,
 } from './photos';
+import { ocrReceiptImage, parseReceiptText } from './receiptOcr';
 import { renderWebUiHtml } from './webUi';
 
 const ALLOWED_TABLES = new Set([
@@ -334,6 +335,96 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
         const days = body.due_soon_days ? Number(body.due_soon_days) : undefined;
         const force = Boolean(body.force);
         sendJson(res, 200, service.runDailyExpiringSoonCheck(days, force));
+        return;
+      }
+
+      // ─── Receipts, OCR & Price History ────────────────────────
+      if (method === 'POST' && pathname === '/api/receipts/ocr') {
+        const body = await readJsonBody(req);
+        if (!body.data_base64 || typeof body.data_base64 !== 'string') {
+          sendError(res, 400, 'Missing data_base64 receipt image');
+          return;
+        }
+        const saved = await savePhotoBase64(ctx.photosDir, body.data_base64, body.mime_type || 'image/jpeg');
+        const fullPath = path.join(ctx.photosDir, saved.fileName);
+        if (!fs.existsSync(fullPath)) {
+          sendError(res, 500, 'Could not read saved receipt image');
+          return;
+        }
+        const imgBuf = fs.readFileSync(fullPath);
+        const cacheDir = path.join(ctx.dataDir, 'ocr-cache');
+        const rawText = await ocrReceiptImage(imgBuf, cacheDir);
+        const parsed = parseReceiptText(rawText);
+        sendJson(res, 200, {
+          photo_file_name: saved.fileName,
+          raw_ocr_text: rawText,
+          ...parsed,
+        });
+        return;
+      }
+
+      if (method === 'GET' && pathname === '/api/receipts/unlinked-items') {
+        const q = url.searchParams.get('q') || '';
+        const days = Number(url.searchParams.get('days') || 30);
+        sendJson(res, 200, service.getUnlinkedReceiptItems(q, Number.isFinite(days) ? days : 30));
+        return;
+      }
+
+      if (pathname === '/api/receipts') {
+        if (method === 'GET') {
+          const limit = Number(url.searchParams.get('limit') || 30);
+          sendJson(res, 200, service.listReceipts(Number.isFinite(limit) ? limit : 30));
+          return;
+        }
+        if (method === 'POST') {
+          const body = await readJsonBody(req);
+          sendJson(res, 201, service.createReceipt(body, currentUser.id));
+          return;
+        }
+      }
+
+      const receiptItemLinkMatch = pathname.match(/^\/api\/receipts\/items\/(\d+)\/link$/);
+      if (method === 'POST' && receiptItemLinkMatch) {
+        const receiptItemId = Number(receiptItemLinkMatch[1]);
+        const body = await readJsonBody(req);
+        const productId = Number(body.product_id);
+        if (!Number.isInteger(productId) || productId <= 0) {
+          sendError(res, 400, 'Invalid product_id');
+          return;
+        }
+        sendJson(
+          res,
+          200,
+          service.linkReceiptItemToProduct(receiptItemId, productId, {
+            unitPrice: body.unit_price !== undefined ? Number(body.unit_price) : undefined,
+            quantity: body.quantity !== undefined ? Number(body.quantity) : undefined,
+          })
+        );
+        return;
+      }
+
+      const receiptIdMatch = pathname.match(/^\/api\/receipts\/(\d+)$/);
+      if (receiptIdMatch) {
+        const receiptId = Number(receiptIdMatch[1]);
+        if (method === 'GET') {
+          const r = service.getReceipt(receiptId);
+          if (!r) {
+            sendError(res, 404, `Receipt #${receiptId} not found`);
+            return;
+          }
+          sendJson(res, 200, r);
+          return;
+        }
+        if (method === 'DELETE') {
+          sendJson(res, 200, service.deleteReceipt(receiptId));
+          return;
+        }
+      }
+
+      const priceHistoryMatch = pathname.match(/^\/api\/products\/(\d+)\/price-history$/);
+      if (method === 'GET' && priceHistoryMatch) {
+        const productId = Number(priceHistoryMatch[1]);
+        sendJson(res, 200, service.getProductPriceHistory(productId));
         return;
       }
 

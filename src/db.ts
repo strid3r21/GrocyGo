@@ -191,12 +191,50 @@ export function initDatabase(dataDir: string): DbContext {
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS receipts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      store_name TEXT DEFAULT '',
+      purchase_date TEXT NOT NULL DEFAULT (date('now')),
+      total_amount REAL DEFAULT NULL,
+      photo_file_name TEXT DEFAULT NULL,
+      raw_ocr_text TEXT DEFAULT '',
+      user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS receipt_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      receipt_id INTEGER NOT NULL REFERENCES receipts(id) ON DELETE CASCADE,
+      raw_name TEXT NOT NULL,
+      quantity REAL NOT NULL DEFAULT 1,
+      unit_price REAL DEFAULT NULL,
+      total_price REAL DEFAULT NULL,
+      matched_product_id INTEGER REFERENCES products(id) ON DELETE SET NULL,
+      stock_added INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS price_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+      receipt_id INTEGER REFERENCES receipts(id) ON DELETE SET NULL,
+      receipt_item_id INTEGER REFERENCES receipt_items(id) ON DELETE SET NULL,
+      store_name TEXT DEFAULT '',
+      unit_price REAL NOT NULL,
+      quantity REAL NOT NULL DEFAULT 1,
+      total_price REAL DEFAULT NULL,
+      purchased_date TEXT NOT NULL DEFAULT (date('now')),
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     CREATE INDEX IF NOT EXISTS idx_stock_product ON stock(product_id);
     CREATE INDEX IF NOT EXISTS idx_stock_location ON stock(location_id);
     CREATE INDEX IF NOT EXISTS idx_barcodes_code ON product_barcodes(barcode);
     CREATE INDEX IF NOT EXISTS idx_shopping_list_list ON shopping_list(shopping_list_id);
     CREATE INDEX IF NOT EXISTS idx_stock_log_time ON stock_log(id DESC);
     CREATE INDEX IF NOT EXISTS idx_notifications_id ON notifications(id DESC);
+    CREATE INDEX IF NOT EXISTS idx_receipt_items_receipt ON receipt_items(receipt_id);
+    CREATE INDEX IF NOT EXISTS idx_price_history_product ON price_history(product_id, purchased_date DESC);
   `);
 
   // Safe migrations for existing databases
