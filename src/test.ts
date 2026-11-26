@@ -934,7 +934,59 @@ async function runTests() {
       sarahExpNotifs.notifications.some((n: any) => n.type === 'expiring_soon' && n.body.includes('Fresh Strawberries'))
     );
 
-    console.log('ALL SERVER v1.9.4 TESTS PASSED!');
+    // 26. Inventory Stats endpoint + Alert Settings + Auto-Add Below Min Stock automation
+    const statsRes = await fetch(`${base}/api/stats?days=30`, { headers }).then((r) => r.json());
+    assert.equal(statsRes.window_days, 30);
+    assert.ok(statsRes.summary.in_stock_products >= 1);
+    assert.ok(Array.isArray(statsRes.by_location));
+    assert.ok(Array.isArray(statsRes.by_group));
+    assert.ok(typeof statsRes.waste.waste_rate_pct === 'number');
+
+    const alertDefaults = await fetch(`${base}/api/settings/alerts`, { headers }).then((r) => r.json());
+    assert.equal(alertDefaults.expiring_soon_enabled, true);
+
+    const updatedAlerts = await fetch(`${base}/api/settings/alerts`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({
+        expiring_soon_enabled: true,
+        expiring_soon_days: 7,
+        expiring_soon_hour: 8,
+        auto_add_below_min_stock: true,
+      }),
+    }).then((r) => r.json());
+    assert.equal(updatedAlerts.expiring_soon_days, 7);
+    assert.equal(updatedAlerts.expiring_soon_hour, 8);
+    assert.equal(updatedAlerts.auto_add_below_min_stock, true);
+
+    // Auto-add to shopping list when consuming below min_stock_amount
+    const autoProd = await fetch(`${base}/api/objects/products`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        name: 'Auto Restock Butter',
+        location_id: 1,
+        qu_id_purchase: 1,
+        qu_id_stock: 1,
+        min_stock_amount: 3,
+      }),
+    }).then((r) => r.json());
+    await fetch(`${base}/api/stock/products/${autoProd.created_object_id}/add`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ amount: 3 }),
+    });
+    await fetch(`${base}/api/stock/products/${autoProd.created_object_id}/consume`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ amount: 2 }),
+    });
+    const shopAfterAuto = await fetch(`${base}/api/objects/shopping_list`, { headers }).then((r) => r.json());
+    const autoShopItem = shopAfterAuto.find((i: any) => Number(i.product_id) === autoProd.created_object_id);
+    assert.ok(autoShopItem, 'Consuming below min_stock_amount should auto-add to shopping list');
+    assert.equal(Number(autoShopItem.amount), 2);
+
+    console.log('ALL SERVER v2.0.0 TESTS PASSED!');
     console.log('\nSample compact MCP inventory_summary output:\n' + summaryText);
     console.log('\nSample compact MCP search_inventory output:\n' + searchText);
   } finally {

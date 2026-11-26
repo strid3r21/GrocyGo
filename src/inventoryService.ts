@@ -772,6 +772,46 @@ export class InventoryService {
       this.cleanupPhotoIfUnused(ph);
     }
 
+    // Optional automation: auto-add to shopping list when stock drops below min_stock_amount
+    try {
+      if (this.getAlertSettings().auto_add_below_min_stock) {
+        const prodMeta = this.db
+          .prepare('SELECT id, name, min_stock_amount FROM products WHERE id = ?')
+          .get(productId) as { id: number; name: string; min_stock_amount: number } | undefined;
+        const minAmt = Number(prodMeta?.min_stock_amount || 0);
+        if (prodMeta && minAmt > 0) {
+          const curRow = this.db
+            .prepare('SELECT COALESCE(SUM(amount), 0) AS total FROM stock WHERE product_id = ? AND amount > 0')
+            .get(productId) as { total: number };
+          const current = Number(curRow?.total || 0);
+          if (current < minAmt) {
+            const missingQty = Math.max(1, Math.ceil(minAmt - current));
+            const existingShop = this.db
+              .prepare(
+                'SELECT id, amount FROM shopping_list WHERE product_id = ? AND shopping_list_id = 1 AND done = 0 LIMIT 1'
+              )
+              .get(productId) as { id: number; amount: number } | undefined;
+            if (existingShop) {
+              if (Number(existingShop.amount) < missingQty) {
+                this.db
+                  .prepare('UPDATE shopping_list SET amount = ? WHERE id = ?')
+                  .run(missingQty, existingShop.id);
+              }
+            } else {
+              this.db
+                .prepare(
+                  'INSERT INTO shopping_list (product_id, amount, shopping_list_id, done, added_by_user_id) VALUES (?, ?, 1, 0, ?)'
+                )
+                .run(productId, missingQty, userId ?? null);
+              this.recordShoppingListNotification(userId ?? null, prodMeta.name);
+            }
+          }
+        }
+      }
+    } catch {
+      // Never fail consume if auto-shopping-list check encounters an error
+    }
+
     return { product_id: productId, consumed: consumedTotal };
   }
 
@@ -1805,6 +1845,363 @@ export class InventoryService {
       title,
       body,
       date: today,
+    };
+  }
+
+  // ─── Alert Settings & Inventory Stats ─────────────────────────
+  getAlertSettings(): {
+    expiring_soon_enabled: boolean;
+    expiring_soon_days: number;
+    expiring_soon_hour: number;
+    auto_add_below_min_stock: boolean;
+    last_expiring_soon_notif_date: string | null;
+  } {
+    const rows = this.db
+      .prepare(
+        `SELECT key, value FROM server_settings
+         WHERE key IN (
+           'alert_expiring_soon_enabled',
+           'alert_expiring_soon_days',
+           'alert_expiring_soon_hour',
+           'alert_auto_add_below_min_stock',
+           'last_expiring_soon_notif_date'
+         )`
+      )
+      .all() as Array<{ key: string; value: string }>;
+    const map = new Map(rows.map((r) => [r.key, r.value]));
+
+    const envDays = Math.max(1, Math.min(30, Number(process.env.DUE_SOON_DAYS ?? 5) || 5));
+    const envHour = Math.max(0, Math.min(23, Number(process.env.EXPIRING_NOTIFY_HOUR ?? 9)));
+
+    return {
+      expiring_soon_enabled: map.has('alert_expiring_soon_enabled')
+        ? map.get('alert_expiring_soon_enabled') === '1'
+        : true,
+      expiring_soon_days: map.has('alert_expiring_soon_days')
+        ? Math.max(1, Math.min(30, Number(map.get('alert_expiring_soon_days')) || envDays))
+        : envDays,
+      expiring_soon_hour: map.has('alert_expiring_soon_hour')
+        ? Math.max(0, Math.min(23, Number(map.get('alert_expiring_soon_hour'))))
+        : envHour,
+      auto_add_below_min_stock: map.get('alert_auto_add_below_min_stock') === '1',
+      last_expiring_soon_notif_date: map.get('last_expiring_soon_notif_date') || null,
+    };
+  }
+
+  updateAlertSettings(payload: {
+    expiring_soon_enabled?: boolean;
+    expiring_soon_days?: number;
+    expiring_soon_hour?: number;
+    auto_add_below_min_stock?: boolean;
+  }) {
+    const upsert = this.db.prepare(
+      `INSERT INTO server_settings (key, value, updated_at)
+       VALUES (?, ?, datetime('now'))
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`
+    );
+    if (typeof payload.expiring_soon_enabled === 'boolean') {
+      upsert.run('alert_expiring_soon_enabled', payload.expiring_soon_enabled ? '1' : '0');
+    }
+    if (payload.expiring_soon_days !== undefined) {
+      const d = Math.max(1, Math.min(30, Math.round(Number(payload.expiring_soon_days) || 5)));
+      upsert.run('alert_expiring_soon_days', String(d));
+    }
+    if (payload.expiring_soon_hour !== undefined) {
+      const h = Math.max(0, Math.min(23, Math.round(Number(payload.expiring_soon_hour))));
+      upsert.run('alert_expiring_soon_hour', String(h));
+    }
+    if (typeof payload.auto_add_below_min_stock === 'boolean') {
+      upsert.run('alert_auto_add_below_min_stock', payload.auto_add_below_min_stock ? '1' : '0');
+    }
+    return this.getAlertSettings();
+  }
+
+  getInventoryStats(days = 30) {
+    const safeDays = Math.max(1, Math.min(365, Math.round(Number(days) || 30)));
+    const alertCfg = this.getAlertSettings();
+    const dueSoonDays = alertCfg.expiring_soon_days;
+    const today = todayIso();
+    const soonCutoff = addDaysIso(dueSoonDays);
+
+    const stockOverview = this.getStockOverview();
+    const volatile = this.getVolatileStock(dueSoonDays);
+
+    const totalProductsRow = this.db
+      .prepare('SELECT COUNT(*) AS c FROM products')
+      .get() as { c: number };
+    const batchAgg = this.db
+      .prepare(
+        `SELECT
+           COUNT(*) AS total_batches,
+           COALESCE(SUM(amount), 0) AS total_units,
+           COALESCE(SUM(CASE WHEN price IS NOT NULL AND price > 0 THEN amount * price ELSE 0 END), 0) AS total_value
+         FROM stock WHERE amount > 0`
+      )
+      .get() as { total_batches: number; total_units: number; total_value: number };
+
+    // Expiry distribution across active stock items
+    const d3 = addDaysIso(3);
+    const d7 = addDaysIso(7);
+    const d14 = addDaysIso(14);
+    const d30 = addDaysIso(30);
+    const expiryBuckets = {
+      overdue: 0,
+      days_0_3: 0,
+      days_4_7: 0,
+      days_8_14: 0,
+      days_15_30: 0,
+      days_30_plus: 0,
+      no_expiry: 0,
+    };
+
+    let openedCount = 0;
+    let openedExpiredCount = 0;
+    let freshCount = 0;
+
+    for (const s of stockOverview) {
+      if (Number(s.amount_opened) > 0) {
+        openedCount++;
+        if (s.opened_use_by_date && s.opened_use_by_date <= today) {
+          openedExpiredCount++;
+        }
+      }
+      const bbd = s.best_before_date;
+      if (!bbd || bbd === NEVER_EXPIRES) {
+        expiryBuckets.no_expiry++;
+        freshCount++;
+      } else if (bbd < today) {
+        expiryBuckets.overdue++;
+      } else if (bbd <= d3) {
+        expiryBuckets.days_0_3++;
+      } else if (bbd <= d7) {
+        expiryBuckets.days_4_7++;
+      } else if (bbd <= d14) {
+        expiryBuckets.days_8_14++;
+      } else if (bbd <= d30) {
+        expiryBuckets.days_15_30++;
+      } else {
+        expiryBuckets.days_30_plus++;
+      }
+
+      if (bbd && bbd !== NEVER_EXPIRES && bbd > soonCutoff) {
+        freshCount++;
+      }
+    }
+
+    // Waste vs consumed over window
+    const windowModifier = `-${safeDays} days`;
+    const usageRow = this.db
+      .prepare(
+        `SELECT
+           COALESCE(SUM(CASE WHEN transaction_type = 'consume' AND spoiled = 0 THEN ABS(amount) ELSE 0 END), 0) AS consumed_qty,
+           COALESCE(SUM(CASE WHEN transaction_type = 'spoiled' OR spoiled = 1 THEN ABS(amount) ELSE 0 END), 0) AS spoiled_qty,
+           COALESCE(SUM(CASE WHEN transaction_type = 'purchase' THEN ABS(amount) ELSE 0 END), 0) AS purchased_qty
+         FROM stock_log
+         WHERE row_created_timestamp >= datetime('now', ?)`
+      )
+      .get(windowModifier) as { consumed_qty: number; spoiled_qty: number; purchased_qty: number };
+
+    const consumedQty = Math.round(Number(usageRow?.consumed_qty || 0) * 100) / 100;
+    const spoiledQty = Math.round(Number(usageRow?.spoiled_qty || 0) * 100) / 100;
+    const totalUsedOrSpoiled = consumedQty + spoiledQty;
+    const wasteRatePct =
+      totalUsedOrSpoiled > 0 ? Math.round((spoiledQty / totalUsedOrSpoiled) * 1000) / 10 : 0;
+
+    const topSpoiled = this.db
+      .prepare(
+        `SELECT
+           COALESCE(p.name, NULLIF(sl.item_label, ''), 'Item') AS name,
+           ROUND(SUM(ABS(sl.amount)), 2) AS total_spoiled
+         FROM stock_log sl
+         LEFT JOIN products p ON p.id = sl.product_id
+         WHERE (sl.transaction_type = 'spoiled' OR sl.spoiled = 1)
+           AND sl.row_created_timestamp >= datetime('now', ?)
+         GROUP BY COALESCE(p.name, NULLIF(sl.item_label, ''), 'Item')
+         ORDER BY total_spoiled DESC
+         LIMIT 8`
+      )
+      .all(windowModifier) as Array<{ name: string; total_spoiled: number }>;
+
+    const topConsumed = this.db
+      .prepare(
+        `SELECT
+           sl.product_id,
+           COALESCE(p.name, NULLIF(sl.item_label, ''), 'Item') AS name,
+           ROUND(SUM(ABS(sl.amount)), 2) AS total_used,
+           COALESCE((SELECT SUM(s.amount) FROM stock s WHERE s.product_id = sl.product_id AND s.amount > 0), 0) AS current_stock
+         FROM stock_log sl
+         LEFT JOIN products p ON p.id = sl.product_id
+         WHERE sl.transaction_type = 'consume' AND sl.spoiled = 0
+           AND sl.row_created_timestamp >= datetime('now', ?)
+         GROUP BY COALESCE(p.name, NULLIF(sl.item_label, ''), 'Item')
+         ORDER BY total_used DESC
+         LIMIT 10`
+      )
+      .all(windowModifier) as Array<{
+      product_id: number | null;
+      name: string;
+      total_used: number;
+      current_stock: number;
+    }>;
+
+    // By location
+    const byLocation = this.db
+      .prepare(
+        `SELECT
+           l.id,
+           l.name,
+           l.is_freezer,
+           COUNT(DISTINCT s.product_id) AS item_count,
+           ROUND(COALESCE(SUM(s.amount), 0), 2) AS total_units
+         FROM locations l
+         LEFT JOIN stock s ON s.location_id = l.id AND s.amount > 0
+         GROUP BY l.id
+         ORDER BY item_count DESC, l.name COLLATE NOCASE ASC`
+      )
+      .all() as Array<{
+      id: number;
+      name: string;
+      is_freezer: number;
+      item_count: number;
+      total_units: number;
+    }>;
+
+    // By group (including Ungrouped)
+    const byGroup = this.db
+      .prepare(
+        `SELECT
+           COALESCE(pg.id, 0) AS id,
+           COALESCE(pg.name, 'Ungrouped') AS name,
+           COUNT(DISTINCT s.product_id) AS item_count,
+           ROUND(COALESCE(SUM(s.amount), 0), 2) AS total_units
+         FROM stock s
+         INNER JOIN products p ON p.id = s.product_id
+         LEFT JOIN product_groups pg ON pg.id = p.product_group_id
+         WHERE s.amount > 0
+         GROUP BY COALESCE(pg.id, 0)
+         ORDER BY item_count DESC, name COLLATE NOCASE ASC`
+      )
+      .all() as Array<{ id: number; name: string; item_count: number; total_units: number }>;
+
+    // Household member activity breakdown
+    const byUser = this.db
+      .prepare(
+        `SELECT
+           COALESCE(u.id, 0) AS user_id,
+           COALESCE(u.display_name, 'Household') AS display_name,
+           SUM(CASE WHEN sl.transaction_type = 'purchase' THEN 1 ELSE 0 END) AS added_count,
+           SUM(CASE WHEN sl.transaction_type IN ('consume', 'spoiled') THEN 1 ELSE 0 END) AS consumed_count,
+           SUM(CASE WHEN sl.transaction_type = 'shopping_done' THEN 1 ELSE 0 END) AS shopping_checked_count,
+           COUNT(*) AS total_actions
+         FROM stock_log sl
+         LEFT JOIN users u ON u.id = sl.user_id
+         WHERE sl.row_created_timestamp >= datetime('now', ?)
+         GROUP BY COALESCE(u.id, 0)
+         ORDER BY total_actions DESC`
+      )
+      .all(windowModifier) as Array<{
+      user_id: number;
+      display_name: string;
+      added_count: number;
+      consumed_count: number;
+      shopping_checked_count: number;
+      total_actions: number;
+    }>;
+
+    // Data health & stale items (in-stock items untouched for 90+ days)
+    const missingPhoto = (
+      this.db
+        .prepare(
+          `SELECT COUNT(DISTINCT p.id) AS c
+           FROM products p
+           INNER JOIN stock s ON s.product_id = p.id AND s.amount > 0
+           WHERE (p.picture_file_name IS NULL OR p.picture_file_name = '')`
+        )
+        .get() as { c: number }
+    ).c;
+
+    const missingGroup = (
+      this.db
+        .prepare(
+          `SELECT COUNT(DISTINCT p.id) AS c
+           FROM products p
+           INNER JOIN stock s ON s.product_id = p.id AND s.amount > 0
+           WHERE p.product_group_id IS NULL`
+        )
+        .get() as { c: number }
+    ).c;
+
+    const missingBarcode = (
+      this.db
+        .prepare(
+          `SELECT COUNT(DISTINCT p.id) AS c
+           FROM products p
+           INNER JOIN stock s ON s.product_id = p.id AND s.amount > 0
+           WHERE NOT EXISTS (SELECT 1 FROM product_barcodes pb WHERE pb.product_id = p.id)`
+        )
+        .get() as { c: number }
+    ).c;
+
+    const staleItems = this.db
+      .prepare(
+        `SELECT
+           p.id,
+           p.name,
+           l.name AS location_name,
+           ROUND(SUM(s.amount), 2) AS amount,
+           MAX(s.row_created_timestamp) AS last_activity
+         FROM stock s
+         INNER JOIN products p ON p.id = s.product_id
+         LEFT JOIN locations l ON l.id = p.location_id
+         WHERE s.amount > 0
+         GROUP BY p.id
+         HAVING MAX(s.row_created_timestamp) <= datetime('now', '-90 days')
+         ORDER BY last_activity ASC
+         LIMIT 10`
+      )
+      .all() as Array<{
+      id: number;
+      name: string;
+      location_name: string | null;
+      amount: number;
+      last_activity: string;
+    }>;
+
+    return {
+      window_days: safeDays,
+      summary: {
+        total_products: Number(totalProductsRow?.c || 0),
+        in_stock_products: stockOverview.length,
+        total_batches: Number(batchAgg?.total_batches || 0),
+        total_units: Math.round(Number(batchAgg?.total_units || 0) * 100) / 100,
+        estimated_stock_value: Math.round(Number(batchAgg?.total_value || 0) * 100) / 100,
+        fresh_count: freshCount,
+        due_soon_count: volatile.due_products.length,
+        overdue_count: volatile.overdue_products.length,
+        opened_count: openedCount,
+        opened_expired_count: openedExpiredCount,
+        below_min_stock_count: volatile.missing_products.length,
+      },
+      waste: {
+        consumed_qty: consumedQty,
+        spoiled_qty: spoiledQty,
+        purchased_qty: Math.round(Number(usageRow?.purchased_qty || 0) * 100) / 100,
+        waste_rate_pct: wasteRatePct,
+        top_spoiled: topSpoiled,
+      },
+      expiry_buckets: expiryBuckets,
+      top_consumed: topConsumed,
+      by_location: byLocation,
+      by_group: byGroup,
+      by_user: byUser,
+      data_health: {
+        missing_photo: Number(missingPhoto || 0),
+        missing_group: Number(missingGroup || 0),
+        missing_barcode: Number(missingBarcode || 0),
+        missing_expiry: expiryBuckets.no_expiry,
+        stale_90d: staleItems.length,
+      },
+      stale_items: staleItems,
     };
   }
 

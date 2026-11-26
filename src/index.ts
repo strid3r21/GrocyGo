@@ -10,14 +10,13 @@ const HOST = process.env.HOST || '0.0.0.0';
 const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(__dirname, '..', 'data'));
 
 export function startDailyExpiringSoonScheduler(service: InventoryService): NodeJS.Timeout {
-  const notifyHour = Math.max(0, Math.min(23, Number(process.env.EXPIRING_NOTIFY_HOUR ?? 9)));
-  const dueSoonDays = Math.max(1, Math.min(30, Number(process.env.DUE_SOON_DAYS ?? 5)));
-
   const check = () => {
     try {
+      const cfg = service.getAlertSettings();
+      if (!cfg.expiring_soon_enabled) return;
       const now = new Date();
-      if (now.getHours() < notifyHour) return;
-      const res = service.runDailyExpiringSoonCheck(dueSoonDays, false);
+      if (now.getHours() < cfg.expiring_soon_hour) return;
+      const res = service.runDailyExpiringSoonCheck(cfg.expiring_soon_days, false);
       if (res.notified) {
         console.log(`[GrocyGo] Sent daily expiring-soon alert: ${res.body}`);
       }
@@ -44,7 +43,7 @@ export function startServer(port = PORT, host = HOST, dataDir = DATA_DIR) {
   server.listen(port, host, () => {
     console.log('');
     console.log('====================================================');
-    console.log('  GrocyGo Server v1.9.4 (Food Inventory + MCP)');
+    console.log('  GrocyGo Server v2.0.0 (Food Inventory + MCP)');
     console.log('====================================================');
     console.log(`  Web UI & API : http://${host === '0.0.0.0' ? 'localhost' : host}:${port}`);
     console.log(`  MCP Endpoint : http://${host === '0.0.0.0' ? 'localhost' : host}:${port}/mcp`);

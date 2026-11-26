@@ -256,6 +256,19 @@ export function renderWebUiHtml(): string {
       justify-content: center;
       overflow: hidden;
     }
+    .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 14px; }
+    .kpi-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px; }
+    .kpi-val { font-size: 26px; font-weight: 800; line-height: 1.15; margin-top: 4px; }
+    .kpi-lbl { font-size: 12px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+    .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; }
+    .bar-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; font-size: 13px; }
+    .bar-label { width: 120px; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+    .bar-track { flex: 1; height: 10px; background: var(--muted); border-radius: 99px; overflow: hidden; }
+    .bar-fill { height: 100%; background: var(--primary); border-radius: 99px; min-width: 2px; }
+    .bar-fill.warn { background: var(--warning); }
+    .bar-fill.bad { background: var(--danger); }
+    .bar-val { width: 68px; text-align: right; color: var(--text-secondary); font-weight: 600; flex-shrink: 0; }
+    .mini-list-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 9px; background: var(--bg); margin-bottom: 6px; font-size: 13px; }
   </style>
 </head>
 <body>
@@ -267,6 +280,7 @@ export function renderWebUiHtml(): string {
     </div>
     <nav id="navTabs" class="hidden" aria-label="Main navigation">
       <button data-tab="inventory" class="active">Inventory</button>
+      <button data-tab="stats">Stats</button>
       <button data-tab="shopping">Shopping</button>
       <button data-tab="labels">Labels</button>
       <button data-tab="locations">Locations</button>
@@ -367,6 +381,26 @@ export function renderWebUiHtml(): string {
         </div>
 
         <div class="table-wrap" id="inventoryTableWrap"></div>
+      </div>
+
+      <!-- Stats & Insights Tab -->
+      <div id="tab-stats" class="hidden">
+        <div class="card between" style="padding:14px;">
+          <div>
+            <h3 style="margin:0;">Inventory Stats &amp; Insights</h3>
+            <div class="muted">Live health, waste tracking, consumption trends, and storage distribution.</div>
+          </div>
+          <div class="row">
+            <select id="statsWindowSelect" aria-label="Stats time window">
+              <option value="30">Last 30 Days</option>
+              <option value="90">Last 90 Days</option>
+              <option value="365">Last 365 Days</option>
+            </select>
+            <button id="refreshStatsBtn" class="sm">Refresh</button>
+          </div>
+        </div>
+        <div id="statsKpis" class="kpi-grid"></div>
+        <div id="statsPanels" class="stats-grid"></div>
       </div>
 
       <!-- Shopping Tab (Global household list: Delete left, Checkbox right) -->
@@ -606,6 +640,46 @@ export function renderWebUiHtml(): string {
 
         <div class="card">
           <div class="between" style="margin-bottom:8px;">
+            <h3 style="margin:0;">Daily Alerts &amp; Automation</h3>
+            <span id="alertsLastRunBadge" class="tag"></span>
+          </div>
+          <p class="muted" style="margin-top:0;margin-bottom:14px;">Configure automatic daily expiring-soon notifications sent to all connected mobile apps and optional low-stock automation.</p>
+          <div style="display:flex;flex-direction:column;gap:12px;margin-bottom:14px;padding:12px 14px;border:1px solid var(--border);border-radius:10px;background:var(--bg);">
+            <label class="row" style="align-items:flex-start;cursor:pointer;">
+              <input id="alertExpiringToggle" type="checkbox" style="min-height:auto;width:20px;height:20px;margin-top:2px;" />
+              <div>
+                <strong>Daily Expiring-Soon Alert</strong>
+                <div class="muted" style="font-size:13px;">Once a day, find items expiring soon and notify all household mobile apps to use them or lose them.</div>
+              </div>
+            </label>
+            <div class="row" style="gap:12px;padding-left:28px;">
+              <div class="field" style="margin-bottom:0;min-width:140px;">
+                <label for="alertDaysInput">Days Ahead</label>
+                <input id="alertDaysInput" type="number" min="1" max="30" value="5" style="width:110px;" />
+              </div>
+              <div class="field" style="margin-bottom:0;min-width:160px;">
+                <label for="alertHourInput">Send Hour (0–23)</label>
+                <input id="alertHourInput" type="number" min="0" max="23" value="9" style="width:110px;" />
+              </div>
+            </div>
+            <label class="row" style="align-items:flex-start;cursor:pointer;padding-top:10px;border-top:1px solid var(--border);">
+              <input id="alertAutoShopToggle" type="checkbox" style="min-height:auto;width:20px;height:20px;margin-top:2px;" />
+              <div>
+                <strong>Auto-Add Below Minimum Stock</strong>
+                <div class="muted" style="font-size:13px;">Automatically add missing quantity to the shared shopping list whenever consuming an item drops it below its Min Stock level.</div>
+              </div>
+            </label>
+          </div>
+          <div class="row" style="gap:8px;">
+            <button id="saveAlertsBtn" class="primary sm">Save Alert Settings</button>
+            <button id="testExpiringAlertBtn" class="sm">Send Expiring Alert Now</button>
+          </div>
+          <div id="alertsAdminNote" class="muted hidden" style="font-size:13px;margin-top:8px;">Only Admin users can change server alert settings.</div>
+          <div id="alertsStatus" class="hidden"></div>
+        </div>
+
+        <div class="card">
+          <div class="between" style="margin-bottom:8px;">
             <h3 style="margin:0;">MCP Server &amp; Permissions</h3>
             <div id="mcpBadges" class="row" style="gap:6px;"></div>
           </div>
@@ -688,6 +762,19 @@ export function renderWebUiHtml(): string {
         <label>Photos</label>
         <div id="editPhotosRow" class="row" style="gap:10px;align-items:stretch;"></div>
       </div>
+      <div class="field">
+        <label>Active Batches</label>
+        <div id="editBatchesList" class="muted" style="font-size:13px;">Loading batches...</div>
+      </div>
+      <div class="field">
+        <label>Linked Barcodes</label>
+        <div id="editBarcodesList" style="margin-bottom:6px;"></div>
+        <div class="row" style="gap:6px;">
+          <input id="editNewBarcodeInput" placeholder="Add barcode (does not change stock)..." style="flex:1;min-height:36px;" />
+          <button id="editAddBarcodeBtn" class="sm" type="button">Add</button>
+        </div>
+        <div id="editBarcodeMsg" class="hidden"></div>
+      </div>
       <div id="editErr" class="hidden"></div>
       <div class="row" style="gap:8px;margin-top:6px;">
         <button id="deleteEditBtn" class="danger" type="button">Delete</button>
@@ -734,7 +821,8 @@ export function renderWebUiHtml(): string {
   <script>
     let apiKey = localStorage.getItem('grocygo_key') || '';
     let currentUser = null;
-    let state = { stock: [], products: [], barcodes: [], groups: [], locations: [], units: [], shopping: [], keys: [], activity: [], users: [], backups: [], mcpSettings: { read_enabled: true, write_enabled: false } };
+    let state = { stock: [], products: [], barcodes: [], groups: [], locations: [], units: [], shopping: [], keys: [], activity: [], users: [], backups: [], mcpSettings: { read_enabled: true, write_enabled: false }, alertSettings: { expiring_soon_enabled: true, expiring_soon_days: 5, expiring_soon_hour: 9, auto_add_below_min_stock: false, last_expiring_soon_notif_date: null }, stats: null };
+    let statsDays = 30;
     let invViewMode = 'stock';
     let selectedIds = new Set();
     let editingProductId = null;
@@ -807,7 +895,7 @@ export function renderWebUiHtml(): string {
     };
 
     async function loadAll() {
-      const [me, stock, products, barcodes, groups, locations, units, shopping, keys, activity, users, backups, mcpSettings] = await Promise.all([
+      const [me, stock, products, barcodes, groups, locations, units, shopping, keys, activity, users, backups, mcpSettings, alertSettings, stats] = await Promise.all([
         api('/api/auth/me'),
         api('/api/stock'),
         api('/api/objects/products'),
@@ -821,9 +909,11 @@ export function renderWebUiHtml(): string {
         api('/api/users').catch(() => []),
         api('/api/backups').catch(() => []),
         api('/api/mcp/settings').catch(() => ({ read_enabled: true, write_enabled: false })),
+        api('/api/settings/alerts').catch(() => ({ expiring_soon_enabled: true, expiring_soon_days: 5, expiring_soon_hour: 9, auto_add_below_min_stock: false, last_expiring_soon_notif_date: null })),
+        api('/api/stats?days=' + statsDays).catch(() => null),
       ]);
       currentUser = me;
-      state = { stock, products, barcodes, groups, locations, units, shopping, keys, activity, users, backups, mcpSettings };
+      state = { stock, products, barcodes, groups, locations, units, shopping, keys, activity, users, backups, mcpSettings, alertSettings, stats };
       const validIds = new Set(products.map((p) => p.id));
       for (const id of [...selectedIds]) {
         if (!validIds.has(id)) selectedIds.delete(id);
@@ -1134,9 +1224,33 @@ export function renderWebUiHtml(): string {
             .join('')
         : '<div class="muted">No backups yet. Click Back Up Now to create one.</div>';
 
-      // MCP & Keys
-      const mcp = state.mcpSettings || { read_enabled: true, write_enabled: false, delete_enabled: false };
+      // MCP & Keys + Alert Settings
+      const alertCfg = state.alertSettings || { expiring_soon_enabled: true, expiring_soon_days: 5, expiring_soon_hour: 9, auto_add_below_min_stock: false, last_expiring_soon_notif_date: null };
       const isAdmin = currentUser && currentUser.role === 'admin';
+      const aExp = document.getElementById('alertExpiringToggle');
+      const aDays = document.getElementById('alertDaysInput');
+      const aHour = document.getElementById('alertHourInput');
+      const aAuto = document.getElementById('alertAutoShopToggle');
+      const aSave = document.getElementById('saveAlertsBtn');
+      if (aExp) {
+        aExp.checked = Boolean(alertCfg.expiring_soon_enabled);
+        aDays.value = String(alertCfg.expiring_soon_days || 5);
+        aHour.value = String(alertCfg.expiring_soon_hour ?? 9);
+        aAuto.checked = Boolean(alertCfg.auto_add_below_min_stock);
+        aExp.disabled = !isAdmin;
+        aDays.disabled = !isAdmin;
+        aHour.disabled = !isAdmin;
+        aAuto.disabled = !isAdmin;
+        aSave.disabled = !isAdmin;
+        document.getElementById('alertsAdminNote').classList.toggle('hidden', Boolean(isAdmin));
+        document.getElementById('alertsLastRunBadge').textContent = alertCfg.last_expiring_soon_notif_date
+          ? 'Last sent: ' + alertCfg.last_expiring_soon_notif_date
+          : 'Not sent yet';
+      }
+
+      renderStats();
+
+      const mcp = state.mcpSettings || { read_enabled: true, write_enabled: false, delete_enabled: false };
       const readChk = document.getElementById('mcpReadToggle');
       const writeChk = document.getElementById('mcpWriteToggle');
       const deleteChk = document.getElementById('mcpDeleteToggle');
@@ -1331,8 +1445,266 @@ export function renderWebUiHtml(): string {
       el.value = String(p.location_id);
 
       renderEditModalPhotos(productId);
+      renderEditModalBarcodes(productId);
+      loadEditModalBatches(productId);
+      document.getElementById('editBarcodeMsg').className = 'hidden';
+      document.getElementById('editNewBarcodeInput').value = '';
       document.getElementById('editErr').className = 'hidden';
       document.getElementById('editModal').classList.add('open');
+    };
+
+    function renderEditModalBarcodes(productId) {
+      const wrap = document.getElementById('editBarcodesList');
+      if (!wrap) return;
+      const list = state.barcodes.filter((b) => Number(b.product_id) === Number(productId));
+      if (list.length === 0) {
+        wrap.innerHTML = '<div class="muted" style="font-size:12px;">No barcodes linked yet.</div>';
+        return;
+      }
+      wrap.innerHTML = list
+        .map((b) => \`
+          <div class="mini-list-row">
+            <code style="font-size:13px;">\${escapeHtml(b.barcode)}</code>
+            <button class="danger sm" type="button" style="min-height:28px;padding:2px 8px;font-size:12px;" onclick="removeEditBarcode(\${b.id})">Remove</button>
+          </div>\`)
+        .join('');
+    }
+
+    async function loadEditModalBatches(productId) {
+      const wrap = document.getElementById('editBatchesList');
+      if (!wrap) return;
+      wrap.innerHTML = '<div class="muted" style="font-size:12px;">Loading batches...</div>';
+      try {
+        const entries = await api('/api/stock/products/' + productId + '/entries');
+        if (!entries || entries.length === 0) {
+          wrap.innerHTML = '<div class="muted" style="font-size:12px;">No active batches in stock.</div>';
+          return;
+        }
+        const today = new Date().toISOString().slice(0, 10);
+        wrap.innerHTML = entries
+          .map((e) => {
+            const loc = e.location_name || 'Location #' + e.location_id;
+            const bbd = e.best_before_date && e.best_before_date !== '2999-12-31' ? e.best_before_date : 'No expiry';
+            const isOpen = Boolean(e.open);
+            const openTag = isOpen
+              ? '<span class="tag ' + (e.opened_use_by_date && e.opened_use_by_date <= today ? 'bad' : 'warn') + '" style="margin-left:4px;">Opened' + (e.opened_use_by_date ? ' · due ' + escapeHtml(e.opened_use_by_date) : '') + '</span>'
+              : '';
+            return \`
+              <div class="mini-list-row">
+                <div>
+                  <strong>\${e.amount}</strong> · \${escapeHtml(loc)} · <span class="muted">\${escapeHtml(bbd)}</span>\${openTag}
+                </div>
+                <div class="row" style="gap:4px;">
+                  \${isOpen
+                    ? \`<button class="sm" type="button" style="min-height:28px;padding:2px 8px;font-size:12px;" onclick="batchExtendOpened(\${productId}, \${e.id})">+7d</button>\`
+                    : \`<button class="sm" type="button" style="min-height:28px;padding:2px 8px;font-size:12px;" onclick="batchMarkOpened(\${productId})">Open</button>\`}
+                  <button class="danger sm" type="button" style="min-height:28px;padding:2px 8px;font-size:12px;" onclick="batchConsumeOne(\${productId}, \${e.id})">-1</button>
+                </div>
+              </div>\`;
+          })
+          .join('');
+      } catch {
+        wrap.innerHTML = '<div class="muted" style="font-size:12px;">Could not load batches.</div>';
+      }
+    }
+
+    window.batchMarkOpened = async (productId) => {
+      await api('/api/stock/products/' + productId + '/open', { method: 'POST', body: JSON.stringify({ amount: 1, days: 14 }) });
+      await loadAll();
+      await loadEditModalBatches(productId);
+    };
+    window.batchExtendOpened = async (productId, entryId) => {
+      await api('/api/stock/products/' + productId + '/open-extend', { method: 'POST', body: JSON.stringify({ days: 7, stock_entry_id: entryId }) });
+      await loadAll();
+      await loadEditModalBatches(productId);
+    };
+    window.batchConsumeOne = async (productId, entryId) => {
+      await api('/api/stock/products/' + productId + '/consume', { method: 'POST', body: JSON.stringify({ amount: 1, stock_entry_id: entryId }) });
+      await loadAll();
+      const s = state.stock.find((x) => x.product_id === productId);
+      document.getElementById('editAmount').value = s ? String(s.amount) : '0';
+      await loadEditModalBatches(productId);
+    };
+    window.removeEditBarcode = async (barcodeId) => {
+      if (!confirm('Remove this barcode from the item?')) return;
+      await api('/api/objects/product_barcodes/' + barcodeId, { method: 'DELETE' });
+      await loadAll();
+      if (editingProductId) renderEditModalBarcodes(editingProductId);
+    };
+    document.getElementById('editAddBarcodeBtn').onclick = async () => {
+      if (!editingProductId) return;
+      const input = document.getElementById('editNewBarcodeInput');
+      const msgEl = document.getElementById('editBarcodeMsg');
+      const code = input.value.trim();
+      msgEl.className = 'hidden';
+      if (!code) return;
+      const existing = state.barcodes.find((b) => String(b.barcode || '').trim().toLowerCase() === code.toLowerCase());
+      if (existing) {
+        const owner = state.products.find((p) => p.id === existing.product_id);
+        msgEl.className = 'notice err';
+        msgEl.textContent = existing.product_id === editingProductId
+          ? 'That barcode is already linked to this item.'
+          : 'That barcode is already linked to "' + (owner ? owner.name : 'another item') + '".';
+        return;
+      }
+      try {
+        await api('/api/objects/product_barcodes', {
+          method: 'POST',
+          body: JSON.stringify({ product_id: editingProductId, barcode: code }),
+        });
+        input.value = '';
+        await loadAll();
+        renderEditModalBarcodes(editingProductId);
+      } catch (e) {
+        msgEl.className = 'notice err';
+        msgEl.textContent = e.message || 'Could not add barcode';
+      }
+    };
+
+    function renderStats() {
+      const kpisEl = document.getElementById('statsKpis');
+      const panelsEl = document.getElementById('statsPanels');
+      if (!kpisEl || !panelsEl) return;
+      const st = state.stats;
+      if (!st) {
+        kpisEl.innerHTML = '';
+        panelsEl.innerHTML = '<div class="card muted">No stats available yet.</div>';
+        return;
+      }
+      const s = st.summary;
+      const w = st.waste;
+      const kpi = (label, val, sub, color) => \`
+        <div class="kpi-card">
+          <div class="kpi-lbl">\${label}</div>
+          <div class="kpi-val" style="\${color ? 'color:' + color : ''}">\${val}</div>
+          <div class="muted" style="font-size:12px;margin-top:4px;">\${sub}</div>
+        </div>\`;
+      kpisEl.innerHTML =
+        kpi('In Stock', s.in_stock_products, s.total_units + ' units · ' + s.total_batches + ' batches', '') +
+        kpi('Expiring Soon', s.due_soon_count, s.overdue_count + ' overdue', s.due_soon_count > 0 ? 'var(--warning)' : '') +
+        kpi('Opened', s.opened_count, s.opened_expired_count + ' timer expired', s.opened_expired_count > 0 ? 'var(--danger)' : 'var(--primary)') +
+        kpi('Below Min Stock', s.below_min_stock_count, s.total_products + ' catalog items', s.below_min_stock_count > 0 ? 'var(--warning)' : '') +
+        kpi('Waste Rate (' + st.window_days + 'd)', w.waste_rate_pct + '%', w.spoiled_qty + ' spoiled / ' + w.consumed_qty + ' used', w.waste_rate_pct > 15 ? 'var(--danger)' : 'var(--primary)') +
+        (s.estimated_stock_value > 0 ? kpi('Stock Value', '$' + s.estimated_stock_value.toFixed(2), 'Recorded prices', '') : '');
+
+      const makeBars = (rows, maxVal, toneFn) => {
+        if (!rows.length) return '<div class="muted">No data yet.</div>';
+        const max = Math.max(1, maxVal || Math.max(...rows.map((r) => r.val)));
+        return rows.map((r) => {
+          const pct = Math.min(100, Math.round((r.val / max) * 100));
+          const tone = toneFn ? toneFn(r) : '';
+          return \`
+            <div class="bar-row">
+              <div class="bar-label" title="\${escapeAttr(r.label)}">\${escapeHtml(r.label)}</div>
+              <div class="bar-track"><div class="bar-fill \${tone}" style="width:\${pct}%;"></div></div>
+              <div class="bar-val">\${escapeHtml(r.text)}</div>
+            </div>\`;
+        }).join('');
+      };
+
+      const eb = st.expiry_buckets;
+      const expiryRows = [
+        { label: 'Overdue', val: eb.overdue, text: String(eb.overdue), tone: 'bad' },
+        { label: 'Next 0–3 days', val: eb.days_0_3, text: String(eb.days_0_3), tone: 'warn' },
+        { label: '4–7 days', val: eb.days_4_7, text: String(eb.days_4_7), tone: 'warn' },
+        { label: '8–14 days', val: eb.days_8_14, text: String(eb.days_8_14), tone: '' },
+        { label: '15–30 days', val: eb.days_15_30, text: String(eb.days_15_30), tone: '' },
+        { label: '30+ days', val: eb.days_30_plus, text: String(eb.days_30_plus), tone: '' },
+        { label: 'No expiry', val: eb.no_expiry, text: String(eb.no_expiry), tone: '' },
+      ];
+
+      const locRows = (st.by_location || []).map((l) => ({
+        label: l.name + (l.is_freezer ? ' ❄' : ''),
+        val: Number(l.item_count || 0),
+        text: l.item_count + ' (' + l.total_units + ')',
+      }));
+      const grpRows = (st.by_group || []).map((g) => ({
+        label: g.name,
+        val: Number(g.item_count || 0),
+        text: g.item_count + ' (' + g.total_units + ')',
+      }));
+      const topConsumedRows = (st.top_consumed || []).map((c) => ({
+        label: c.name,
+        val: Number(c.total_used || 0),
+        text: c.total_used + ' used',
+      }));
+      const topSpoiledHtml = (w.top_spoiled || []).length
+        ? w.top_spoiled.map((x) => '<div class="mini-list-row"><strong>' + escapeHtml(x.name) + '</strong><span class="tag bad">' + x.total_spoiled + ' spoiled</span></div>').join('')
+        : '<div class="muted">Zero spoiled items in the last ' + st.window_days + ' days!</div>';
+      const userHtml = (st.by_user || []).length
+        ? st.by_user.map((u) => '<div class="mini-list-row"><strong>' + escapeHtml(u.display_name) + '</strong><span class="muted">+' + u.added_count + ' added · ' + u.consumed_count + ' used · ' + u.shopping_checked_count + ' shopped</span></div>').join('')
+        : '<div class="muted">No household activity recorded in this period.</div>';
+      const dh = st.data_health || {};
+      const staleHtml = (st.stale_items || []).length
+        ? st.stale_items.map((x) => '<div class="mini-list-row"><span><strong>' + escapeHtml(x.name) + '</strong> <span class="muted">(' + escapeHtml(x.location_name || '') + ')</span></span><button class="sm" type="button" onclick="openEditModal(' + x.id + ')">Inspect</button></div>').join('')
+        : '<div class="muted">No stale items untouched for 90+ days.</div>';
+
+      panelsEl.innerHTML = \`
+        <div class="card"><h3 style="margin-top:0;">Upcoming Expirations</h3>\${makeBars(expiryRows, null, (r) => r.tone)}</div>
+        <div class="card"><h3 style="margin-top:0;">Most Consumed (\${st.window_days}d)</h3>\${makeBars(topConsumedRows)}</div>
+        <div class="card"><h3 style="margin-top:0;">By Storage Location</h3>\${makeBars(locRows)}</div>
+        <div class="card"><h3 style="margin-top:0;">By Product Group</h3>\${makeBars(grpRows)}</div>
+        <div class="card"><h3 style="margin-top:0;">Top Spoiled / Wasted (\${st.window_days}d)</h3>\${topSpoiledHtml}</div>
+        <div class="card"><h3 style="margin-top:0;">Household Activity (\${st.window_days}d)</h3>\${userHtml}</div>
+        <div class="card">
+          <h3 style="margin-top:0;">Catalog Data Health</h3>
+          <div class="mini-list-row"><span>In-stock items missing photo</span><span class="tag">\${dh.missing_photo || 0}</span></div>
+          <div class="mini-list-row"><span>In-stock items missing group</span><span class="tag">\${dh.missing_group || 0}</span></div>
+          <div class="mini-list-row"><span>In-stock items missing barcode</span><span class="tag">\${dh.missing_barcode || 0}</span></div>
+          <div class="mini-list-row"><span>In-stock items with no expiry date</span><span class="tag">\${dh.missing_expiry || 0}</span></div>
+        </div>
+        <div class="card"><h3 style="margin-top:0;">Stale Items (90+ days untouched)</h3>\${staleHtml}</div>
+      \`;
+    }
+
+    document.getElementById('statsWindowSelect').onchange = async (e) => {
+      statsDays = Number(e.target.value) || 30;
+      state.stats = await api('/api/stats?days=' + statsDays).catch(() => null);
+      renderStats();
+    };
+    document.getElementById('refreshStatsBtn').onclick = async () => {
+      state.stats = await api('/api/stats?days=' + statsDays).catch(() => null);
+      renderStats();
+    };
+    document.getElementById('saveAlertsBtn').onclick = async () => {
+      const stEl = document.getElementById('alertsStatus');
+      stEl.className = 'hidden';
+      try {
+        const updated = await api('/api/settings/alerts', {
+          method: 'PUT',
+          body: JSON.stringify({
+            expiring_soon_enabled: document.getElementById('alertExpiringToggle').checked,
+            expiring_soon_days: Number(document.getElementById('alertDaysInput').value || 5),
+            expiring_soon_hour: Number(document.getElementById('alertHourInput').value || 9),
+            auto_add_below_min_stock: document.getElementById('alertAutoShopToggle').checked,
+          }),
+        });
+        state.alertSettings = updated;
+        stEl.className = 'notice';
+        stEl.textContent = 'Alert settings saved and active immediately.';
+      } catch (e) {
+        stEl.className = 'notice err';
+        stEl.textContent = e.message || 'Could not save alert settings';
+      }
+    };
+    document.getElementById('testExpiringAlertBtn').onclick = async () => {
+      const stEl = document.getElementById('alertsStatus');
+      stEl.className = 'hidden';
+      try {
+        const days = Number(document.getElementById('alertDaysInput').value || 5);
+        const res = await api('/api/notifications/check-expiring', {
+          method: 'POST',
+          body: JSON.stringify({ due_soon_days: days, force: true }),
+        });
+        stEl.className = 'notice';
+        stEl.textContent = res.notified
+          ? 'Sent mobile notification: "' + res.body + '"'
+          : 'No items are currently expiring within ' + days + ' days.';
+        await loadAll();
+      } catch (e) {
+        stEl.className = 'notice err';
+        stEl.textContent = e.message || 'Could not run expiring check';
+      }
     };
 
     document.getElementById('saveEditBtn').onclick = async () => {
@@ -1574,9 +1946,12 @@ export function renderWebUiHtml(): string {
       document.querySelectorAll('#navTabs button[data-tab]').forEach((b) => {
         b.classList.toggle('active', b.dataset.tab === tabName);
       });
-      ['inventory', 'shopping', 'labels', 'locations', 'activity', 'users', 'import', 'keys'].forEach((t) => {
+      ['inventory', 'stats', 'shopping', 'labels', 'locations', 'activity', 'users', 'import', 'keys'].forEach((t) => {
         document.getElementById('tab-' + t).classList.toggle('hidden', t !== tabName);
       });
+      if (tabName === 'stats') {
+        api('/api/stats?days=' + statsDays).then((s) => { state.stats = s; renderStats(); }).catch(() => {});
+      }
       if (tabName === 'labels') {
         if (!document.getElementById('labelCodeInput').value.trim()) {
           document.getElementById('labelCodeInput').value = generateLabelCode();

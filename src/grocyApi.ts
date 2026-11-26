@@ -337,6 +337,46 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
         return;
       }
 
+      // ─── Inventory Stats & Alert Settings ─────────────────────
+      if (method === 'GET' && pathname === '/api/stats') {
+        const days = Number(url.searchParams.get('days') || 30);
+        sendJson(res, 200, service.getInventoryStats(Number.isFinite(days) ? days : 30));
+        return;
+      }
+
+      if (pathname === '/api/settings/alerts') {
+        if (method === 'GET') {
+          sendJson(res, 200, service.getAlertSettings());
+          return;
+        }
+        if (method === 'PUT') {
+          if (currentUser.role !== 'admin') {
+            sendError(res, 403, 'Admin permission required to update alert settings');
+            return;
+          }
+          const body = await readJsonBody(req);
+          sendJson(
+            res,
+            200,
+            service.updateAlertSettings({
+              expiring_soon_enabled:
+                typeof body.expiring_soon_enabled === 'boolean'
+                  ? body.expiring_soon_enabled
+                  : undefined,
+              expiring_soon_days:
+                body.expiring_soon_days !== undefined ? Number(body.expiring_soon_days) : undefined,
+              expiring_soon_hour:
+                body.expiring_soon_hour !== undefined ? Number(body.expiring_soon_hour) : undefined,
+              auto_add_below_min_stock:
+                typeof body.auto_add_below_min_stock === 'boolean'
+                  ? body.auto_add_below_min_stock
+                  : undefined,
+            })
+          );
+          return;
+        }
+      }
+
       // ─── MCP Permission Settings (Admin toggleable anytime) ───
       if (pathname === '/api/mcp/settings') {
         if (method === 'GET') {
