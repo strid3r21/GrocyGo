@@ -887,7 +887,54 @@ async function runTests() {
     }).then((r) => r.json());
     assert.ok(ext2.opened_use_by_date > ext1.opened_use_by_date, 'Second +7d extend advances deadline again');
 
-    console.log('ALL SERVER v1.9.3 TESTS PASSED!');
+    // 25. Daily expiring-soon notification job (broadcasts once per day to all household apps)
+    const soonDate = new Date();
+    soonDate.setDate(soonDate.getDate() + 2);
+    const soonIso = `${soonDate.getFullYear()}-${String(soonDate.getMonth() + 1).padStart(2, '0')}-${String(soonDate.getDate()).padStart(2, '0')}`;
+    const expProd = await fetch(`${base}/api/objects/products`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ name: 'Fresh Strawberries', location_id: 1, qu_id_purchase: 1, qu_id_stock: 1 }),
+    }).then((r) => r.json());
+    await fetch(`${base}/api/stock/products/${expProd.created_object_id}/add`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ amount: 1, best_before_date: soonIso }),
+    });
+
+    const firstCheck = await fetch(`${base}/api/notifications/check-expiring`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ due_soon_days: 5 }),
+    }).then((r) => r.json());
+    assert.equal(firstCheck.ran, true);
+    assert.equal(firstCheck.notified, true);
+    assert.ok(firstCheck.items.includes('Fresh Strawberries'));
+    assert.ok(firstCheck.body.includes('expiring soon'));
+    assert.ok(firstCheck.body.includes('lose it') || firstCheck.body.includes('lose them'));
+
+    // Second run on the same day without force must not send a duplicate
+    const secondCheck = await fetch(`${base}/api/notifications/check-expiring`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ due_soon_days: 5 }),
+    }).then((r) => r.json());
+    assert.equal(secondCheck.ran, false);
+    assert.equal(secondCheck.notified, false);
+
+    // Both Admin and Sarah receive the broadcast notification
+    const adminExpNotifs = await fetch(`${base}/api/notifications?after_id=0`, { headers }).then((r) => r.json());
+    const sarahExpNotifs = await fetch(`${base}/api/notifications?after_id=0`, { headers: sarahHeaders }).then((r) =>
+      r.json()
+    );
+    assert.ok(
+      adminExpNotifs.notifications.some((n: any) => n.type === 'expiring_soon' && n.body.includes('Fresh Strawberries'))
+    );
+    assert.ok(
+      sarahExpNotifs.notifications.some((n: any) => n.type === 'expiring_soon' && n.body.includes('Fresh Strawberries'))
+    );
+
+    console.log('ALL SERVER v1.9.4 TESTS PASSED!');
     console.log('\nSample compact MCP inventory_summary output:\n' + summaryText);
     console.log('\nSample compact MCP search_inventory output:\n' + searchText);
   } finally {

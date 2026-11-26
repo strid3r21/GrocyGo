@@ -9,17 +9,42 @@ const PORT = Number(process.env.PORT || 9283);
 const HOST = process.env.HOST || '0.0.0.0';
 const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(__dirname, '..', 'data'));
 
+export function startDailyExpiringSoonScheduler(service: InventoryService): NodeJS.Timeout {
+  const notifyHour = Math.max(0, Math.min(23, Number(process.env.EXPIRING_NOTIFY_HOUR ?? 9)));
+  const dueSoonDays = Math.max(1, Math.min(30, Number(process.env.DUE_SOON_DAYS ?? 5)));
+
+  const check = () => {
+    try {
+      const now = new Date();
+      if (now.getHours() < notifyHour) return;
+      const res = service.runDailyExpiringSoonCheck(dueSoonDays, false);
+      if (res.notified) {
+        console.log(`[GrocyGo] Sent daily expiring-soon alert: ${res.body}`);
+      }
+    } catch (err) {
+      console.error('[GrocyGo] Daily expiring-soon check failed:', err);
+    }
+  };
+
+  // Check once shortly after startup, then every 30 minutes
+  setTimeout(check, 5000).unref();
+  const timer = setInterval(check, 30 * 60 * 1000);
+  timer.unref();
+  return timer;
+}
+
 export function startServer(port = PORT, host = HOST, dataDir = DATA_DIR) {
   const ctx = initDatabase(dataDir);
   const service = new InventoryService(ctx);
   const backupTimer = startDailyBackupScheduler(ctx);
+  const expiringTimer = startDailyExpiringSoonScheduler(service);
   const handler = createRequestHandler(ctx, service);
   const server = http.createServer(handler);
 
   server.listen(port, host, () => {
     console.log('');
     console.log('====================================================');
-    console.log('  GrocyGo Server v1.7.0 (Food Inventory + MCP)');
+    console.log('  GrocyGo Server v1.9.4 (Food Inventory + MCP)');
     console.log('====================================================');
     console.log(`  Web UI & API : http://${host === '0.0.0.0' ? 'localhost' : host}:${port}`);
     console.log(`  MCP Endpoint : http://${host === '0.0.0.0' ? 'localhost' : host}:${port}/mcp`);
@@ -36,6 +61,7 @@ export function startServer(port = PORT, host = HOST, dataDir = DATA_DIR) {
 
   const shutdown = () => {
     clearInterval(backupTimer);
+    clearInterval(expiringTimer);
     server.close(() => {
       try {
         ctx.db.close();

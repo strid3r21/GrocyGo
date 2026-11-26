@@ -1714,6 +1714,100 @@ export class InventoryService {
     }
   }
 
+  runDailyExpiringSoonCheck(
+    dueSoonDays = Number(process.env.DUE_SOON_DAYS || 5),
+    force = false
+  ): {
+    ran: boolean;
+    notified: boolean;
+    items: string[];
+    title?: string;
+    body?: string;
+    date: string;
+  } {
+    const today = todayIso();
+    const safeDays = Math.max(1, Math.min(30, Math.round(Number(dueSoonDays) || 5)));
+
+    if (!force) {
+      const lastRun = this.db
+        .prepare("SELECT value FROM server_settings WHERE key = 'last_expiring_soon_notif_date'")
+        .get() as { value: string } | undefined;
+      if (lastRun?.value === today) {
+        return { ran: false, notified: false, items: [], date: today };
+      }
+    }
+
+    const volatile = this.getVolatileStock(safeDays);
+    const dueItems = volatile.due_products || [];
+    const itemNames = Array.from(
+      new Set(
+        dueItems
+          .map((d: any) => String(d.product?.name || '').trim())
+          .filter(Boolean)
+      )
+    );
+
+    // Mark today as checked so we only send once per day
+    this.db
+      .prepare(
+        `INSERT INTO server_settings (key, value, updated_at)
+         VALUES ('last_expiring_soon_notif_date', ?, datetime('now'))
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`
+      )
+      .run(today);
+
+    if (itemNames.length === 0) {
+      return { ran: true, notified: false, items: [], date: today };
+    }
+
+    let listText: string;
+    if (itemNames.length === 1) {
+      listText = itemNames[0];
+    } else if (itemNames.length === 2) {
+      listText = `${itemNames[0]} and ${itemNames[1]}`;
+    } else if (itemNames.length <= 5) {
+      listText = `${itemNames.slice(0, -1).join(', ')}, and ${itemNames[itemNames.length - 1]}`;
+    } else {
+      const extra = itemNames.length - 5;
+      listText = `${itemNames.slice(0, 5).join(', ')}, and ${extra} more ${extra === 1 ? 'item' : 'items'}`;
+    }
+
+    const title = 'Expiring Soon';
+    const body =
+      itemNames.length === 1
+        ? `${listText} is expiring soon, use it or lose it!`
+        : `${listText} are expiring soon, use them or lose them!`;
+
+    this.db
+      .prepare(
+        `INSERT INTO notifications (type, actor_user_id, actor_name, item_name, title, body)
+         VALUES ('expiring_soon', NULL, 'GrocyGo', ?, ?, ?)`
+      )
+      .run(itemNames.join(', '), title, body);
+
+    this.db.exec(
+      'DELETE FROM notifications WHERE id NOT IN (SELECT id FROM notifications ORDER BY id DESC LIMIT 500)'
+    );
+
+    const ntfyUrl = process.env.NTFY_TOPIC_URL?.trim();
+    if (ntfyUrl) {
+      fetch(ntfyUrl, {
+        method: 'POST',
+        headers: { Title: title, Tags: 'hourglass_flowing_sand' },
+        body,
+      }).catch(() => {});
+    }
+
+    return {
+      ran: true,
+      notified: true,
+      items: itemNames,
+      title,
+      body,
+      date: today,
+    };
+  }
+
   getNotificationsForUser(userId: number, afterId = 0, limit = 30) {
     const latestRow = this.db
       .prepare('SELECT COALESCE(MAX(id), 0) AS max_id FROM notifications')

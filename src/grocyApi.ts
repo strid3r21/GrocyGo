@@ -313,7 +313,7 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
         return;
       }
 
-      // ─── Shopping List Notifications (other household users) ──
+      // ─── Notifications (Shopping List + Daily Expiring Soon) ──
       if (method === 'GET' && pathname === '/api/notifications') {
         const afterId = Number(url.searchParams.get('after_id') || 0);
         const limit = Number(url.searchParams.get('limit') || 30);
@@ -326,6 +326,14 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
             Number.isFinite(limit) ? limit : 30
           )
         );
+        return;
+      }
+
+      if (method === 'POST' && pathname === '/api/notifications/check-expiring') {
+        const body = await readJsonBody(req);
+        const days = body.due_soon_days ? Number(body.due_soon_days) : undefined;
+        const force = Boolean(body.force);
+        sendJson(res, 200, service.runDailyExpiringSoonCheck(days, force));
         return;
       }
 
