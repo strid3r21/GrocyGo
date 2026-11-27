@@ -144,6 +144,77 @@ const MCP_READ_TOOLS = [
       additionalProperties: false,
     },
   },
+  {
+    name: 'get_price_history',
+    description:
+      'Get price history, latest/min/avg/max price, price change %, and store-by-store records for a product by id or name.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'integer', description: 'Product ID.' },
+        name: { type: 'string', description: 'Product name (exact or partial match).' },
+        limit: { type: 'integer', description: 'Max history entries to return (default 20, max 50).' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'search_prices',
+    description:
+      'Compare latest recorded prices across products and stores (e.g. filter by store like Kroger/Meijer or product query, sort by recent, cheapest, or expensive).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Optional product name substring.' },
+        store: { type: 'string', description: 'Optional store name substring (e.g. Kroger, Meijer).' },
+        sort: {
+          type: 'string',
+          enum: ['recent', 'cheapest', 'expensive'],
+          description: 'Sort order (default recent).',
+        },
+        limit: { type: 'integer', description: 'Max rows to return (default 25, max 100).' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'list_receipts',
+    description:
+      'List scanned grocery receipts with store, date, total spend, and item counts. Supports filtering by store or recent days.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        store: { type: 'string', description: 'Optional store name substring filter.' },
+        days: { type: 'integer', description: 'Optional lookback window in days (e.g. 30, 90).' },
+        limit: { type: 'integer', description: 'Max receipts to return (default 15, max 50).' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'get_receipt',
+    description: 'Get full receipt details including store, date, subtotal/tax/total, and all line items with prices.',
+    inputSchema: {
+      type: 'object',
+      required: ['receipt_id'],
+      properties: {
+        receipt_id: { type: 'integer', description: 'Numeric receipt ID.' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'get_stats',
+    description:
+      'Get household pantry analytics: inventory value, expiry horizon distribution, consumption vs waste rate, top used/spoiled items, and data health.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        days: { type: 'integer', description: 'Analytics window in days (default 30, range 1-365).' },
+      },
+      additionalProperties: false,
+    },
+  },
 ];
 
 const MCP_WRITE_TOOLS = [
@@ -346,6 +417,42 @@ const MCP_WRITE_TOOLS = [
       additionalProperties: false,
     },
   },
+  {
+    name: 'add_stock',
+    description:
+      'Add/purchase stock for an existing product by id or name, optionally recording unit price, expiry date, location, and note.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'integer', description: 'Product ID.' },
+        name: { type: 'string', description: 'Product name (if id omitted).' },
+        amount: { type: 'number', description: 'Quantity to add (default 1).' },
+        price: { type: 'number', description: 'Optional unit price (e.g. 4.99).' },
+        best_before_date: { type: 'string', description: 'Optional YYYY-MM-DD expiry date.' },
+        location_id: { type: 'integer', description: 'Optional storage location ID.' },
+        location_name: { type: 'string', description: 'Optional storage location name.' },
+        note: { type: 'string', description: 'Optional batch note.' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'consume_stock',
+    description:
+      'Consume (use) or mark spoiled stock for an existing product by id or name.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'integer', description: 'Product ID.' },
+        name: { type: 'string', description: 'Product name (if id omitted).' },
+        amount: { type: 'number', description: 'Quantity to consume (default 1).' },
+        spoiled: { type: 'boolean', description: 'Set true if item was thrown out/spoiled (default false).' },
+        location_id: { type: 'integer', description: 'Optional storage location ID to consume from.' },
+        location_name: { type: 'string', description: 'Optional storage location name to consume from.' },
+      },
+      additionalProperties: false,
+    },
+  },
 ];
 
 const MCP_DELETE_TOOLS = [
@@ -514,7 +621,7 @@ export async function handleMcpJsonRpc(
           },
           serverInfo: {
             name: 'grocygo-mcp',
-            version: '1.7.0',
+            version: '2.5.0',
           },
           instructions,
         },
@@ -676,10 +783,32 @@ async function executeTool(
       )
       .all() as any[];
 
+    const valueRow = db
+      .prepare(
+        `SELECT COALESCE(SUM(CASE WHEN price IS NOT NULL AND price > 0 THEN amount * price ELSE 0 END), 0) AS total_value
+         FROM stock WHERE amount > 0`
+      )
+      .get() as { total_value: number };
+    const spend30Row = db
+      .prepare(
+        `SELECT COALESCE(SUM(COALESCE(total_amount, 0)), 0) AS spend_30d, COUNT(*) AS receipt_count
+         FROM receipts WHERE purchase_date >= date('now', '-30 days')`
+      )
+      .get() as { spend_30d: number; receipt_count: number };
+
+    const valueParts: string[] = [];
+    if (valueRow.total_value > 0) valueParts.push(`Pantry value: $${valueRow.total_value.toFixed(2)}`);
+    if (spend30Row.receipt_count > 0) {
+      valueParts.push(
+        `Receipts(30d): ${spend30Row.receipt_count} ($${spend30Row.spend_30d.toFixed(2)})`
+      );
+    }
+
     const lines: string[] = [
       `Stock: ${stock.length} items | Due<=${dueDays}d: ${volatile.due_products.length} | Overdue: ${
         volatile.overdue_products.length + volatile.expired_products.length
       } | Low: ${volatile.missing_products.length} | Shopping(open): ${openShopping}`,
+      ...(valueParts.length > 0 ? [valueParts.join(' | ')] : []),
       `Locations: ${locCounts
         .map((l) => `${l.name}${l.is_freezer ? '*' : ''}(${l.items})`)
         .join(', ')}`,
@@ -883,6 +1012,59 @@ async function executeTool(
     if (details.product.min_stock_amount > 0) {
       lines.push(`Min stock: ${details.product.min_stock_amount}`);
     }
+
+    const priceHist = service.getProductPriceHistory(productId);
+    if (priceHist.count > 0 && priceHist.latest_price !== null) {
+      const latestRec = priceHist.history[0];
+      const storeStr = latestRec?.store_name ? ` @ ${latestRec.store_name}` : '';
+      const dateStr = latestRec?.purchased_date ? ` (${latestRec.purchased_date})` : '';
+      const rangeStr =
+        priceHist.count > 1
+          ? ` | avg:$${priceHist.avg_price?.toFixed(2)} range:$${priceHist.min_price?.toFixed(2)}-$${priceHist.max_price?.toFixed(2)} (${priceHist.count} records)`
+          : '';
+      lines.push(`Price: $${priceHist.latest_price.toFixed(2)}${storeStr}${dateStr}${rangeStr}`);
+    }
+
+    const nutParts: string[] = [];
+    if (details.product.calories_kcal !== null && details.product.calories_kcal !== undefined) {
+      nutParts.push(
+        `${details.product.calories_kcal} kcal/${details.product.calories_basis === 'serving' ? 'srv' : '100g'}`
+      );
+    }
+    if (details.product.protein_g !== null && details.product.protein_g !== undefined) {
+      nutParts.push(`P:${details.product.protein_g}g`);
+    }
+    if (details.product.carbs_g !== null && details.product.carbs_g !== undefined) {
+      nutParts.push(`C:${details.product.carbs_g}g`);
+    }
+    if (details.product.fat_g !== null && details.product.fat_g !== undefined) {
+      nutParts.push(`F:${details.product.fat_g}g`);
+    }
+    if (details.product.sugar_g !== null && details.product.sugar_g !== undefined) {
+      nutParts.push(`Sugar:${details.product.sugar_g}g`);
+    }
+    if (details.product.sodium_mg !== null && details.product.sodium_mg !== undefined) {
+      nutParts.push(`Na:${details.product.sodium_mg}mg`);
+    }
+    if (details.product.serving_size) {
+      nutParts.push(`serving:${details.product.serving_size}`);
+    }
+    if (details.product.nutriscore_grade) {
+      nutParts.push(`Nutri-Score:${String(details.product.nutriscore_grade).toUpperCase()}`);
+    }
+    if (nutParts.length > 0) {
+      lines.push(`Nutrition: ${nutParts.join(' | ')}`);
+    }
+
+    const barcodes = (
+      db
+        .prepare('SELECT barcode FROM product_barcodes WHERE product_id = ? ORDER BY id ASC')
+        .all(productId) as Array<{ barcode: string }>
+    ).map((b) => b.barcode);
+    if (barcodes.length > 0) {
+      lines.push(`Barcodes: ${barcodes.join(', ')}`);
+    }
+
     if (details.product.picture_file_name) {
       lines.push(`Product photo: /api/photos/${details.product.picture_file_name}`);
     }
@@ -900,12 +1082,17 @@ async function executeTool(
             ? ` due:${e.best_before_date}`
             : '';
         const open = e.open ? ' [open]' : '';
+        const price =
+          e.price !== null && e.price !== undefined && Number(e.price) > 0
+            ? ` $${Number(e.price).toFixed(2)}`
+            : '';
+        const added = e.purchased_date ? ` added:${e.purchased_date}` : '';
         const note = e.note ? ` note:"${e.note}"` : '';
         const photo = e.photo_file_name ? ` photo:/api/photos/${e.photo_file_name}` : '';
         lines.push(
           `- batch#${e.id}: ${fmtQty(e.amount, qu?.name, qu?.name_plural)} @ ${
             e.location_name || '?'
-          }${due}${open}${note}${photo}`
+          }${price}${due}${added}${open}${note}${photo}`
         );
       }
     }
@@ -923,13 +1110,49 @@ async function executeTool(
       return textResult(includeDone ? 'Shopping list is empty.' : 'No open shopping list items.');
     }
 
+    const latestPrices = new Map<number, number>();
+    const priceRows = db
+      .prepare(
+        `SELECT ph.product_id, ph.unit_price
+         FROM price_history ph
+         INNER JOIN (
+           SELECT product_id, MAX(id) AS max_id
+           FROM price_history
+           GROUP BY product_id
+         ) latest ON latest.max_id = ph.id`
+      )
+      .all() as Array<{ product_id: number; unit_price: number }>;
+    for (const pr of priceRows) {
+      latestPrices.set(Number(pr.product_id), Number(pr.unit_price));
+    }
+
+    let estTotal = 0;
+    let pricedCount = 0;
     const lines = items.map((i) => {
       const label = i.product_name || i.note || 'Item';
       const extraNote = i.product_name && i.note ? ` (${i.note})` : '';
-      const qty = fmtQty(Number(i.amount || 1), i.qu_name, i.qu_name_plural);
+      const qtyNum = Number(i.amount || 1);
+      const qty = fmtQty(qtyNum, i.qu_name, i.qu_name_plural);
+      const recipes =
+        Array.isArray(i.recipe_names) && i.recipe_names.length > 0
+          ? ` {${i.recipe_names.join(', ')}}`
+          : '';
+      const unitPrice = i.product_id ? latestPrices.get(Number(i.product_id)) : undefined;
+      let pricePart = '';
+      if (unitPrice !== undefined && unitPrice > 0) {
+        const lineEst = unitPrice * qtyNum;
+        if (!i.done) {
+          estTotal += lineEst;
+          pricedCount++;
+        }
+        pricePart = ` ~$${unitPrice.toFixed(2)} ea`;
+      }
       const by = i.added_by_name ? ` [by ${i.added_by_name}]` : '';
-      return `${i.done ? '[x]' : '[ ]'} ${label} x ${qty}${extraNote}${by}`;
+      return `${i.done ? '[x]' : '[ ]'} ${label} x ${qty}${pricePart}${extraNote}${recipes}${by}`;
     });
+    if (pricedCount > 0) {
+      lines.push(`Estimated total (${pricedCount} priced open item${pricedCount === 1 ? '' : 's'}): ~$${estTotal.toFixed(2)}`);
+    }
     return textResult(lines.join('\n'));
   }
 
@@ -1380,6 +1603,314 @@ async function executeTool(
     if (!targetId) return textResult('Recipe not found. Provide recipe_id or exact name.', true);
     const del = service.deleteRecipe(targetId, actingUserId);
     return textResult(`Deleted recipe #${del.id}: ${del.name}`);
+  }
+
+  // ─── PRICES, RECEIPTS, STATS & STOCK TOOLS ──────────────────
+
+  if (name === 'get_price_history') {
+    const productId = resolveProductId(db, args.id, args.name);
+    if (!productId) return textResult('Item not found. Provide a valid id or name.', true);
+    const prod = db.prepare('SELECT id, name FROM products WHERE id = ?').get(productId) as
+      | { id: number; name: string }
+      | undefined;
+    if (!prod) return textResult(`Product #${productId} not found.`, true);
+
+    const limit =
+      typeof args.limit === 'number' && args.limit > 0
+        ? Math.min(50, Math.floor(args.limit))
+        : 20;
+    const hist = service.getProductPriceHistory(productId);
+    if (hist.count === 0) {
+      return textResult(`#${prod.id} ${prod.name}: No price history recorded yet.`);
+    }
+
+    const changeStr =
+      hist.price_change !== null
+        ? ` | change:${hist.price_change >= 0 ? '+' : ''}$${hist.price_change.toFixed(2)} (${
+            hist.price_change_pct !== null
+              ? `${hist.price_change_pct >= 0 ? '+' : ''}${hist.price_change_pct}%`
+              : ''
+          })`
+        : '';
+
+    const lines: string[] = [
+      `#${prod.id} ${prod.name} | latest:$${hist.latest_price!.toFixed(2)} | avg:$${hist.avg_price!.toFixed(2)} | min:$${hist.min_price!.toFixed(2)} | max:$${hist.max_price!.toFixed(2)}${changeStr}`,
+      `History (${Math.min(limit, hist.history.length)}/${hist.count}):`,
+    ];
+    for (const h of hist.history.slice(0, limit)) {
+      const store = h.store_name ? ` @ ${h.store_name}` : '';
+      const qtyPart = h.quantity && h.quantity !== 1 ? ` (qty ${h.quantity})` : '';
+      const totPart = h.total_price !== null ? ` total:$${Number(h.total_price).toFixed(2)}` : '';
+      const recPart = h.receipt_id ? ` [receipt #${h.receipt_id}]` : '';
+      lines.push(
+        `- ${h.purchased_date} | $${Number(h.unit_price).toFixed(2)} ea${qtyPart}${totPart}${store}${recPart}`
+      );
+    }
+    return textResult(lines.join('\n'));
+  }
+
+  if (name === 'search_prices') {
+    const query = typeof args.query === 'string' ? args.query.trim().toLowerCase() : '';
+    const storeFilter = typeof args.store === 'string' ? args.store.trim().toLowerCase() : '';
+    const sort = typeof args.sort === 'string' ? args.sort : 'recent';
+    const limit =
+      typeof args.limit === 'number' && args.limit > 0
+        ? Math.min(100, Math.floor(args.limit))
+        : 25;
+
+    const rows = db
+      .prepare(
+        `SELECT ph.product_id, p.name AS product_name, ph.store_name, ph.unit_price, ph.quantity,
+                ph.total_price, ph.purchased_date, ph.receipt_id
+         FROM price_history ph
+         INNER JOIN products p ON p.id = ph.product_id
+         ORDER BY ph.purchased_date DESC, ph.id DESC`
+      )
+      .all() as Array<{
+      product_id: number;
+      product_name: string;
+      store_name: string;
+      unit_price: number;
+      quantity: number;
+      total_price: number | null;
+      purchased_date: string;
+      receipt_id: number | null;
+    }>;
+
+    const filtered = rows.filter((r) => {
+      if (query && !r.product_name.toLowerCase().includes(query)) return false;
+      if (storeFilter && !(r.store_name || '').toLowerCase().includes(storeFilter)) return false;
+      return true;
+    });
+
+    // Deduplicate to latest record per (product_id, store_name)
+    const deduped: typeof filtered = [];
+    const seen = new Set<string>();
+    for (const r of filtered) {
+      const key = `${r.product_id}::${(r.store_name || '').toLowerCase()}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      deduped.push(r);
+    }
+
+    if (sort === 'cheapest') {
+      deduped.sort((a, b) => Number(a.unit_price) - Number(b.unit_price));
+    } else if (sort === 'expensive') {
+      deduped.sort((a, b) => Number(b.unit_price) - Number(a.unit_price));
+    }
+
+    if (deduped.length === 0) return textResult('No matching price records found.');
+
+    const slice = deduped.slice(0, limit);
+    const lines = slice.map(
+      (r) =>
+        `#${r.product_id} ${r.product_name} | $${Number(r.unit_price).toFixed(2)} ea${
+          r.store_name ? ` @ ${r.store_name}` : ''
+        } | ${r.purchased_date}${r.receipt_id ? ` [receipt #${r.receipt_id}]` : ''}`
+    );
+    if (deduped.length > slice.length) {
+      lines.push(`... (${deduped.length - slice.length} more)`);
+    }
+    return textResult(lines.join('\n'));
+  }
+
+  if (name === 'list_receipts') {
+    const storeFilter = typeof args.store === 'string' ? args.store.trim().toLowerCase() : '';
+    const days =
+      typeof args.days === 'number' && args.days > 0 ? Math.min(3650, Math.floor(args.days)) : null;
+    const limit =
+      typeof args.limit === 'number' && args.limit > 0
+        ? Math.min(50, Math.floor(args.limit))
+        : 15;
+
+    const allReceipts = service.listReceipts(100);
+    const cutoff = days ? addDaysIso(-days) : null;
+    const matched = allReceipts.filter((r) => {
+      if (storeFilter && !(r.store_name || '').toLowerCase().includes(storeFilter)) return false;
+      if (cutoff && r.purchase_date && r.purchase_date < cutoff) return false;
+      return true;
+    });
+
+    if (matched.length === 0) return textResult('No matching receipts found.');
+
+    const totalSpend = matched.reduce((sum, r) => sum + Number(r.total_amount || 0), 0);
+    const slice = matched.slice(0, limit);
+    const lines: string[] = [
+      `Receipts: ${matched.length} matched | Total spend: $${totalSpend.toFixed(2)}`,
+      ...slice.map((r) => {
+        const tot =
+          r.total_amount !== null && r.total_amount !== undefined
+            ? `$${Number(r.total_amount).toFixed(2)}`
+            : 'n/a';
+        const unlinked = r.unlinked_count > 0 ? ` (${r.unlinked_count} unlinked)` : '';
+        return `#${r.id} ${r.purchase_date} | ${r.store_name || 'Store'} | ${tot} | ${r.item_count} items${unlinked}`;
+      }),
+    ];
+    if (matched.length > slice.length) {
+      lines.push(`... (${matched.length - slice.length} more)`);
+    }
+    return textResult(lines.join('\n'));
+  }
+
+  if (name === 'get_receipt') {
+    const receiptId = Number(args.receipt_id);
+    if (!Number.isInteger(receiptId) || receiptId <= 0) {
+      return textResult('Provide a valid receipt_id.', true);
+    }
+    const r = service.getReceipt(receiptId);
+    if (!r) return textResult(`Receipt #${receiptId} not found.`, true);
+
+    const moneyParts: string[] = [];
+    if (r.subtotal_amount !== null && r.subtotal_amount !== undefined) {
+      moneyParts.push(`subtotal:$${Number(r.subtotal_amount).toFixed(2)}`);
+    }
+    if (r.tax_amount !== null && r.tax_amount !== undefined) {
+      moneyParts.push(`tax:$${Number(r.tax_amount).toFixed(2)}`);
+    }
+    if (r.total_amount !== null && r.total_amount !== undefined) {
+      moneyParts.push(`total:$${Number(r.total_amount).toFixed(2)}`);
+    }
+
+    const lines: string[] = [
+      `Receipt #${r.id} | ${r.store_name || 'Store'} | ${r.purchase_date}${
+        moneyParts.length > 0 ? ` | ${moneyParts.join(' ')}` : ''
+      }`,
+    ];
+    if (r.notes) lines.push(`Notes: ${r.notes}`);
+    if (r.photo_file_name) lines.push(`Photo: /api/photos/${r.photo_file_name}`);
+    if (Array.isArray(r.items) && r.items.length > 0) {
+      lines.push(`Items (${r.items.length}):`);
+      for (const it of r.items) {
+        const up =
+          it.unit_price !== null && it.unit_price !== undefined
+            ? `$${Number(it.unit_price).toFixed(2)} ea`
+            : '';
+        const tp =
+          it.total_price !== null && it.total_price !== undefined
+            ? `total:$${Number(it.total_price).toFixed(2)}`
+            : '';
+        const linked = it.matched_product_id
+          ? ` -> #${it.matched_product_id} ${it.matched_product_name || ''}`
+          : ' [unlinked]';
+        lines.push(
+          `- ${it.raw_name} x${it.quantity || 1}${up ? ` | ${up}` : ''}${tp ? ` | ${tp}` : ''}${linked}`
+        );
+      }
+    }
+    return textResult(lines.join('\n'));
+  }
+
+  if (name === 'get_stats') {
+    const days =
+      typeof args.days === 'number' && args.days > 0 ? Math.min(365, Math.floor(args.days)) : 30;
+    const stats = service.getInventoryStats(days);
+    const s = stats.summary;
+    const eb = stats.expiry_buckets;
+    const dh = stats.data_health;
+    const w = stats.waste;
+
+    const lines: string[] = [
+      `Pantry (${days}d window): ${s.in_stock_products}/${s.total_products} products in stock | ${s.total_units} units across ${s.total_batches} batches | Value: $${Number(s.estimated_stock_value || 0).toFixed(2)}`,
+      `Status: overdue:${s.overdue_count} | due_soon:${s.due_soon_count} | opened:${s.opened_count} | low_stock:${s.below_min_stock_count} | fresh:${s.fresh_count}`,
+      `Expiry horizon: overdue:${eb.overdue}, 0-3d:${eb.days_0_3}, 4-7d:${eb.days_4_7}, 8-14d:${eb.days_8_14}, 15-30d:${eb.days_15_30}, 30+d:${eb.days_30_plus}, no_expiry:${eb.no_expiry}`,
+      `Usage(${days}d): purchased:${w.purchased_qty} | consumed:${w.consumed_qty} | spoiled:${w.spoiled_qty} | waste_rate:${w.waste_rate_pct}%`,
+      `Data health: missing_photo:${dh.missing_photo}, missing_barcode:${dh.missing_barcode}, missing_group:${dh.missing_group}, stale_90d:${dh.stale_90d}`,
+    ];
+    if (stats.by_store.length > 0) {
+      lines.push(
+        `Spend by store(${days}d): ${stats.by_store
+          .map((st) => `${st.store_name}:$${Number(st.total_spent).toFixed(2)}(${st.receipt_count})`)
+          .join(', ')}`
+      );
+    }
+    if (stats.top_consumed.length > 0) {
+      lines.push(
+        `Top used: ${stats.top_consumed
+          .slice(0, 5)
+          .map((t) => `${t.name}(${t.total_used})`)
+          .join(', ')}`
+      );
+    }
+    if (w.top_spoiled.length > 0) {
+      lines.push(
+        `Top spoiled: ${w.top_spoiled
+          .slice(0, 5)
+          .map((t) => `${t.name}(${t.total_spoiled})`)
+          .join(', ')}`
+      );
+    }
+    return textResult(lines.join('\n'));
+  }
+
+  if (name === 'add_stock') {
+    const productId = resolveProductId(db, args.id, args.name);
+    if (!productId) return textResult('Item not found. Provide a valid id or name.', true);
+    const amount = typeof args.amount === 'number' && args.amount > 0 ? args.amount : 1;
+
+    let locationId: number | undefined;
+    if (typeof args.location_id === 'number' && args.location_id > 0) {
+      locationId = args.location_id;
+    } else if (typeof args.location_name === 'string' && args.location_name.trim()) {
+      const l = db
+        .prepare('SELECT id FROM locations WHERE LOWER(name) = LOWER(?) LIMIT 1')
+        .get(args.location_name.trim()) as { id: number } | undefined;
+      if (!l) return textResult(`Location "${args.location_name}" not found.`, true);
+      locationId = l.id;
+    }
+
+    const entry = service.purchaseProduct(
+      productId,
+      {
+        amount,
+        price: typeof args.price === 'number' && args.price >= 0 ? args.price : undefined,
+        best_before_date:
+          typeof args.best_before_date === 'string' && args.best_before_date.trim()
+            ? args.best_before_date.trim()
+            : undefined,
+        location_id: locationId,
+        note: typeof args.note === 'string' ? args.note.trim() : undefined,
+      },
+      actingUserId
+    );
+
+    const prod = db.prepare('SELECT name FROM products WHERE id = ?').get(productId) as
+      | { name: string }
+      | undefined;
+    const priceNote =
+      typeof args.price === 'number' && args.price >= 0 ? ` @ $${args.price.toFixed(2)}` : '';
+    return textResult(
+      `Added ${amount} of #${productId} ${prod?.name || 'item'}${priceNote} (batch #${entry.id})`
+    );
+  }
+
+  if (name === 'consume_stock') {
+    const productId = resolveProductId(db, args.id, args.name);
+    if (!productId) return textResult('Item not found. Provide a valid id or name.', true);
+    const amount = typeof args.amount === 'number' && args.amount > 0 ? args.amount : 1;
+    const spoiled = Boolean(args.spoiled);
+
+    let locationId: number | undefined;
+    if (typeof args.location_id === 'number' && args.location_id > 0) {
+      locationId = args.location_id;
+    } else if (typeof args.location_name === 'string' && args.location_name.trim()) {
+      const l = db
+        .prepare('SELECT id FROM locations WHERE LOWER(name) = LOWER(?) LIMIT 1')
+        .get(args.location_name.trim()) as { id: number } | undefined;
+      if (!l) return textResult(`Location "${args.location_name}" not found.`, true);
+      locationId = l.id;
+    }
+
+    const res = service.consumeProduct(
+      productId,
+      { amount, spoiled, location_id: locationId },
+      actingUserId
+    );
+    const prod = db.prepare('SELECT name FROM products WHERE id = ?').get(productId) as
+      | { name: string }
+      | undefined;
+    return textResult(
+      `${spoiled ? 'Marked spoiled' : 'Consumed'} ${res.consumed} of #${productId} ${prod?.name || 'item'}`
+    );
   }
 
   return textResult(`Unknown tool: ${name}`, true);

@@ -161,7 +161,7 @@ async function runTests() {
     assert.equal(init.result.serverInfo.name, 'grocygo-mcp');
 
     const toolsList = await mcpCall(2, 'tools/list');
-    assert.equal(toolsList.result.tools.length, 9);
+    assert.equal(toolsList.result.tools.length, 14);
 
     const summary = await mcpCall(3, 'tools/call', { name: 'inventory_summary', arguments: {} });
     const summaryText: string = summary.result.content[0].text;
@@ -532,7 +532,7 @@ async function runTests() {
     assert.equal(enabledWrite.write_enabled, true);
 
     const rwTools = await mcpCall(21, 'tools/list');
-    assert.equal(rwTools.result.tools.length, 16);
+    assert.equal(rwTools.result.tools.length, 23);
 
     // AI creates group and assigns item to group
     const createdGrp = await mcpCall(22, 'tools/call', {
@@ -581,7 +581,7 @@ async function runTests() {
       body: JSON.stringify({ read_enabled: true, write_enabled: false }),
     });
     const readOnlyAgain = await mcpCall(28, 'tools/list');
-    assert.equal(readOnlyAgain.result.tools.length, 9);
+    assert.equal(readOnlyAgain.result.tools.length, 14);
 
     // 18. Remove product & shelf photos via UI endpoints (clears DB, deletes files, logs activity)
     const delProdPhoto = await fetch(`${base}/api/photos/product/${prodId}`, {
@@ -664,7 +664,7 @@ async function runTests() {
       body: JSON.stringify({ read_enabled: true, write_enabled: true, delete_enabled: false }),
     });
     const writeNoDelTools = await mcpCall(30, 'tools/list');
-    assert.equal(writeNoDelTools.result.tools.length, 16);
+    assert.equal(writeNoDelTools.result.tools.length, 23);
     const blockedDelete = await mcpCall(31, 'tools/call', {
       name: 'delete_group',
       arguments: { group_name: 'Dry Goods' },
@@ -679,7 +679,7 @@ async function runTests() {
       body: JSON.stringify({ delete_enabled: true }),
     });
     const allMcpTools = await mcpCall(32, 'tools/list');
-    assert.equal(allMcpTools.result.tools.length, 20);
+    assert.equal(allMcpTools.result.tools.length, 27);
     const deletedGrp = await mcpCall(33, 'tools/call', {
       name: 'delete_group',
       arguments: { group_name: 'Dry Goods' },
@@ -1337,7 +1337,105 @@ async function runTests() {
     const recipesAfter = await fetch(`${base}/api/recipes`, { headers }).then((r) => r.json());
     assert.equal(recipesAfter.length, 0);
 
-    console.log('ALL SERVER v2.4.4 TESTS PASSED!');
+    // 33. Extended MCP tools: prices, receipts, stats, enriched get_item, add_stock, consume_stock
+    const mcpAddStock = await fetch(`${base}/mcp`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 810,
+        method: 'tools/call',
+        params: {
+          name: 'add_stock',
+          arguments: { id: prodId, amount: 2, price: 4.99, note: 'MCP stock test' },
+        },
+      }),
+    }).then((r) => r.json());
+    assert.ok(!mcpAddStock.result.isError, JSON.stringify(mcpAddStock));
+    assert.ok(mcpAddStock.result.content[0].text.includes('$4.99'));
+
+    const mcpItemFull = await fetch(`${base}/mcp`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 811,
+        method: 'tools/call',
+        params: { name: 'get_item', arguments: { id: prodId } },
+      }),
+    }).then((r) => r.json());
+    assert.ok(!mcpItemFull.result.isError, JSON.stringify(mcpItemFull));
+    assert.ok(mcpItemFull.result.content[0].text.includes('Nutrition: 150 kcal/srv'));
+    assert.ok(mcpItemFull.result.content[0].text.includes('Barcodes:'));
+    assert.ok(mcpItemFull.result.content[0].text.includes('$4.99'));
+
+    const mcpPriceHist = await fetch(`${base}/mcp`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 812,
+        method: 'tools/call',
+        params: { name: 'get_price_history', arguments: { id: prodId } },
+      }),
+    }).then((r) => r.json());
+    assert.ok(!mcpPriceHist.result.isError, JSON.stringify(mcpPriceHist));
+    assert.ok(mcpPriceHist.result.content[0].text.includes('latest:$'));
+
+    const mcpSearchPrices = await fetch(`${base}/mcp`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 813,
+        method: 'tools/call',
+        params: { name: 'search_prices', arguments: { sort: 'expensive' } },
+      }),
+    }).then((r) => r.json());
+    assert.ok(!mcpSearchPrices.result.isError, JSON.stringify(mcpSearchPrices));
+    assert.ok(mcpSearchPrices.result.content[0].text.includes('Organic Whole Milk'));
+
+    const mcpListReceipts = await fetch(`${base}/mcp`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 814,
+        method: 'tools/call',
+        params: { name: 'list_receipts', arguments: {} },
+      }),
+    }).then((r) => r.json());
+    assert.ok(!mcpListReceipts.result.isError, JSON.stringify(mcpListReceipts));
+    assert.ok(mcpListReceipts.result.content[0].text.includes('Receipts:'));
+
+    const mcpStats = await fetch(`${base}/mcp`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 815,
+        method: 'tools/call',
+        params: { name: 'get_stats', arguments: { days: 30 } },
+      }),
+    }).then((r) => r.json());
+    assert.ok(!mcpStats.result.isError, JSON.stringify(mcpStats));
+    assert.ok(mcpStats.result.content[0].text.includes('Expiry horizon:'));
+    assert.ok(mcpStats.result.content[0].text.includes('Usage(30d):'));
+
+    const mcpConsume = await fetch(`${base}/mcp`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 816,
+        method: 'tools/call',
+        params: { name: 'consume_stock', arguments: { id: prodId, amount: 1 } },
+      }),
+    }).then((r) => r.json());
+    assert.ok(!mcpConsume.result.isError, JSON.stringify(mcpConsume));
+    assert.ok(mcpConsume.result.content[0].text.includes('Consumed 1'));
+
+    console.log('ALL SERVER v2.5.0 TESTS PASSED!');
     console.log('\nSample compact MCP inventory_summary output:\n' + summaryText);
     console.log('\nSample compact MCP search_inventory output:\n' + searchText);
   } finally {
