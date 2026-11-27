@@ -1000,6 +1000,87 @@ export class InventoryService {
     };
   }
 
+  editStockEntry(
+    entryId: number,
+    payload: {
+      amount?: number;
+      best_before_date?: string;
+      price?: number | null;
+      note?: string;
+      location_id?: number;
+    },
+    userId?: number | null
+  ) {
+    const existing = this.db
+      .prepare('SELECT * FROM stock WHERE id = ?')
+      .get(entryId) as any;
+    if (!existing) {
+      throw new Error(`Stock entry #${entryId} not found`);
+    }
+
+    const product = this.db
+      .prepare('SELECT id, name FROM products WHERE id = ?')
+      .get(existing.product_id) as { id: number; name: string } | undefined;
+    const itemLabel = product?.name || `Product #${existing.product_id}`;
+
+    const nextAmount =
+      payload.amount !== undefined ? Number(payload.amount) : Number(existing.amount);
+    if (!Number.isFinite(nextAmount) || nextAmount < 0) {
+      throw new Error('amount must be a non-negative number');
+    }
+
+    if (nextAmount === 0) {
+      this.db.prepare('DELETE FROM stock WHERE id = ?').run(entryId);
+      this.logActivity({
+        productId: existing.product_id,
+        itemLabel,
+        amount: Number(existing.amount),
+        transactionType: 'stock_edit',
+        locationId: existing.location_id ?? null,
+        note: 'Batch cleared (set to 0)',
+        userId,
+      });
+      return { id: entryId, deleted: true, amount: 0 };
+    }
+
+    const nextBbd =
+      payload.best_before_date !== undefined
+        ? payload.best_before_date.trim() || NEVER_EXPIRES
+        : existing.best_before_date;
+    const nextPrice =
+      payload.price !== undefined
+        ? payload.price === null || !Number.isFinite(Number(payload.price))
+          ? null
+          : Number(payload.price)
+        : existing.price;
+    const nextNote =
+      payload.note !== undefined ? String(payload.note || '').trim() : existing.note || '';
+    const nextLocationId =
+      payload.location_id !== undefined && Number.isFinite(Number(payload.location_id)) && Number(payload.location_id) > 0
+        ? Number(payload.location_id)
+        : existing.location_id;
+
+    this.db
+      .prepare(
+        `UPDATE stock
+         SET amount = ?, best_before_date = ?, price = ?, note = ?, location_id = ?
+         WHERE id = ?`
+      )
+      .run(nextAmount, nextBbd, nextPrice, nextNote, nextLocationId, entryId);
+
+    this.logActivity({
+      productId: existing.product_id,
+      itemLabel,
+      amount: nextAmount,
+      transactionType: 'stock_edit',
+      locationId: nextLocationId ?? null,
+      note: nextNote || `Edited batch #${entryId}`,
+      userId,
+    });
+
+    return this.db.prepare('SELECT * FROM stock WHERE id = ?').get(entryId);
+  }
+
   inventoryProduct(
     productId: number,
     payload: {

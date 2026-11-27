@@ -215,7 +215,7 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
       }
 
       if (method === 'GET' && pathname === '/api/health') {
-        sendJson(res, 200, { ok: true, service: 'grocygo-server', version: '2.3.4' });
+        sendJson(res, 200, { ok: true, service: 'grocygo-server', version: '2.3.5' });
         return;
       }
 
@@ -929,6 +929,35 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
           sendJson(res, 200, { deleted: safe });
           return;
         }
+      }
+
+      // ─── Edit single stock batch entry ────────────────────────
+      const stockEntryMatch = pathname.match(/^\/api\/stock\/entry\/(\d+)$/);
+      if (stockEntryMatch && method === 'PUT') {
+        const entryId = Number(stockEntryMatch[1]);
+        const body = await readJsonBody(req);
+        const updated = service.editStockEntry(
+          entryId,
+          {
+            amount: body.amount !== undefined ? Number(body.amount) : undefined,
+            best_before_date:
+              body.best_before_date !== undefined ? String(body.best_before_date) : undefined,
+            price:
+              body.price === null || body.price === ''
+                ? null
+                : body.price !== undefined
+                ? Number(body.price)
+                : undefined,
+            note: body.note !== undefined ? String(body.note) : undefined,
+            location_id:
+              body.location_id !== undefined && body.location_id !== null
+                ? Number(body.location_id)
+                : undefined,
+          },
+          currentUser.id
+        );
+        sendJson(res, 200, updated);
+        return;
       }
 
       // ─── Stock Endpoints ──────────────────────────────────────

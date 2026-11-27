@@ -1150,7 +1150,35 @@ async function runTests() {
     assert.ok(dryPrint.tspl.includes('GG-TEST01'));
     assert.ok(dryPrint.tspl.includes('PRINT 2,1'));
 
-    console.log('ALL SERVER v2.3.4 TESTS PASSED!');
+    // 31. Edit single stock batch entry (PUT /api/stock/entry/:id)
+    const milkEntriesBefore = await fetch(`${base}/api/stock/products/${prodId}/entries`, { headers }).then((r) =>
+      r.json()
+    );
+    assert.ok(milkEntriesBefore.length >= 1);
+    const targetBatchId = milkEntriesBefore[0].id;
+    const editedBatch = await fetch(`${base}/api/stock/entry/${targetBatchId}`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({
+        amount: 3,
+        best_before_date: '2026-12-10',
+        price: 5.49,
+        note: 'Top shelf',
+      }),
+    }).then((r) => r.json());
+    assert.equal(Number(editedBatch.amount), 3);
+    assert.equal(editedBatch.best_before_date, '2026-12-10');
+    assert.equal(Number(editedBatch.price), 5.49);
+    assert.equal(editedBatch.note, 'Top shelf');
+
+    // Restore milk batch back to 1 bottle for deterministic summary output
+    await fetch(`${base}/api/stock/entry/${targetBatchId}`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ amount: 1, best_before_date: '2026-12-01', note: '' }),
+    });
+
+    console.log('ALL SERVER v2.3.5 TESTS PASSED!');
     console.log('\nSample compact MCP inventory_summary output:\n' + summaryText);
     console.log('\nSample compact MCP search_inventory output:\n' + searchText);
   } finally {
