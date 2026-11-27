@@ -215,7 +215,7 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
       }
 
       if (method === 'GET' && pathname === '/api/health') {
-        sendJson(res, 200, { ok: true, service: 'grocygo-server', version: '2.3.6' });
+        sendJson(res, 200, { ok: true, service: 'grocygo-server', version: '2.4.0' });
         return;
       }
 
@@ -447,6 +447,176 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
           codes,
         });
         return;
+      }
+
+      // ─── Recipes & Meal Planning ──────────────────────────────
+      if (method === 'GET' && pathname === '/api/recipes/discover') {
+        const q = (url.searchParams.get('q') || '').trim();
+        const apiUrl = q
+          ? `https://www.themealdb.com/api/json/v1/1/search.php?s=${encodeURIComponent(q)}`
+          : 'https://www.themealdb.com/api/json/v1/1/search.php?s=chicken';
+        try {
+          const r = await fetch(apiUrl, { signal: AbortSignal.timeout(10_000) });
+          const data = (await r.json()) as { meals?: any[] | null };
+          const meals = (data?.meals || []).slice(0, 12).map((m: any) => {
+            const ings: Array<{ ingredient_name: string; amount: number; unit: string }> = [];
+            for (let i = 1; i <= 20; i++) {
+              const ingName = String(m[`strIngredient${i}`] || '').trim();
+              const measure = String(m[`strMeasure${i}`] || '').trim();
+              if (!ingName) continue;
+              const numMatch = measure.match(/^(\d+(?:\.\d+)?)\s*(.*)$/);
+              ings.push({
+                ingredient_name: ingName,
+                amount: numMatch ? Number(numMatch[1]) || 1 : 1,
+                unit: numMatch ? numMatch[2].trim() : measure,
+              });
+            }
+            return {
+              external_id: String(m.idMeal || ''),
+              name: String(m.strMeal || ''),
+              description: [m.strArea, m.strCategory].filter(Boolean).join(' · '),
+              instructions: String(m.strInstructions || '').trim(),
+              tags: String(m.strTags || m.strCategory || ''),
+              source_url: String(m.strSource || m.strYoutube || ''),
+              image_url: String(m.strMealThumb || ''),
+              ingredients: ings,
+            };
+          });
+          sendJson(res, 200, { source: 'TheMealDB', meals });
+        } catch (err: any) {
+          sendError(res, 502, `Could not fetch recipes from TheMealDB: ${err?.message || 'network error'}`);
+        }
+        return;
+      }
+
+      if (pathname === '/api/recipes') {
+        if (method === 'GET') {
+          const sort = url.searchParams.get('sort') || 'urgent';
+          const q = url.searchParams.get('q') || '';
+          sendJson(res, 200, service.listRecipes({ sort, q }));
+          return;
+        }
+        if (method === 'POST') {
+          const body = await readJsonBody(req);
+          let photoFileName: string | null = body.photo_file_name || null;
+          if (!photoFileName && typeof body.photo_base64 === 'string' && body.photo_base64.trim()) {
+            const saved = await savePhotoBase64(
+              ctx.photosDir,
+              body.photo_base64,
+              body.mime_type || 'image/jpeg'
+            );
+            photoFileName = saved.fileName;
+          } else if (!photoFileName && typeof body.photo_url === 'string' && /^https?:\/\//i.test(body.photo_url)) {
+            try {
+              const imgRes = await fetch(body.photo_url, { signal: AbortSignal.timeout(10_000) });
+              if (imgRes.ok) {
+                const buf = Buffer.from(await imgRes.arrayBuffer());
+                const mime = imgRes.headers.get('content-type') || 'image/jpeg';
+                const saved = await savePhotoBase64(ctx.photosDir, buf.toString('base64'), mime);
+                photoFileName = saved.fileName;
+              }
+            } catch {
+              // ignore remote image download failure
+            }
+          }
+          const created = service.createRecipe(
+            {
+              name: String(body.name || ''),
+              description: body.description !== undefined ? String(body.description) : '',
+              instructions: body.instructions !== undefined ? String(body.instructions) : '',
+              servings: body.servings !== undefined ? Number(body.servings) : 2,
+              prep_minutes: body.prep_minutes ?? null,
+              cook_minutes: body.cook_minutes ?? null,
+              tags: body.tags !== undefined ? String(body.tags) : '',
+              source_url: body.source_url !== undefined ? String(body.source_url) : '',
+              photo_file_name: photoFileName,
+              ingredients: Array.isArray(body.ingredients) ? body.ingredients : [],
+            },
+            currentUser.id
+          );
+          sendJson(res, 201, created);
+          return;
+        }
+      }
+
+      const recipePhotoMatch = pathname.match(/^\/api\/recipes\/(\d+)\/photo$/);
+      if (recipePhotoMatch) {
+        const recipeId = Number(recipePhotoMatch[1]);
+        if (method === 'POST') {
+          const body = await readJsonBody(req);
+          if (!body.data_base64 || typeof body.data_base64 !== 'string') {
+            sendError(res, 400, 'Missing data_base64 photo payload');
+            return;
+          }
+          const saved = await savePhotoBase64(ctx.photosDir, body.data_base64, body.mime_type || 'image/jpeg');
+          const updated = service.updateRecipe(recipeId, { photo_file_name: saved.fileName }, currentUser.id);
+          sendJson(res, 200, { file_name: saved.fileName, recipe: updated });
+          return;
+        }
+        if (method === 'DELETE') {
+          const updated = service.updateRecipe(recipeId, { photo_file_name: null }, currentUser.id);
+          sendJson(res, 200, { recipe: updated });
+          return;
+        }
+      }
+
+      const recipeShopMatch = pathname.match(/^\/api\/recipes\/(\d+)\/add-missing-to-shopping$/);
+      if (recipeShopMatch && method === 'POST') {
+        const recipeId = Number(recipeShopMatch[1]);
+        const body = await readJsonBody(req);
+        const ingIds = Array.isArray(body.ingredient_ids)
+          ? body.ingredient_ids.map((n: any) => Number(n)).filter((n: number) => Number.isFinite(n))
+          : undefined;
+        sendJson(res, 200, service.addRecipeMissingToShopping(recipeId, ingIds, currentUser.id));
+        return;
+      }
+
+      const recipeIdMatch = pathname.match(/^\/api\/recipes\/(\d+)$/);
+      if (recipeIdMatch) {
+        const recipeId = Number(recipeIdMatch[1]);
+        if (method === 'GET') {
+          const recipe = service.getRecipe(recipeId);
+          if (!recipe) {
+            sendError(res, 404, `Recipe #${recipeId} not found`);
+            return;
+          }
+          sendJson(res, 200, recipe);
+          return;
+        }
+        if (method === 'PUT') {
+          const body = await readJsonBody(req);
+          let photoFileName: string | null | undefined = body.photo_file_name;
+          if (typeof body.photo_base64 === 'string' && body.photo_base64.trim()) {
+            const saved = await savePhotoBase64(
+              ctx.photosDir,
+              body.photo_base64,
+              body.mime_type || 'image/jpeg'
+            );
+            photoFileName = saved.fileName;
+          }
+          const updated = service.updateRecipe(
+            recipeId,
+            {
+              ...(body.name !== undefined ? { name: String(body.name) } : {}),
+              ...(body.description !== undefined ? { description: String(body.description) } : {}),
+              ...(body.instructions !== undefined ? { instructions: String(body.instructions) } : {}),
+              ...(body.servings !== undefined ? { servings: Number(body.servings) } : {}),
+              ...(body.prep_minutes !== undefined ? { prep_minutes: body.prep_minutes } : {}),
+              ...(body.cook_minutes !== undefined ? { cook_minutes: body.cook_minutes } : {}),
+              ...(body.tags !== undefined ? { tags: String(body.tags) } : {}),
+              ...(body.source_url !== undefined ? { source_url: String(body.source_url) } : {}),
+              ...(photoFileName !== undefined ? { photo_file_name: photoFileName } : {}),
+              ...(Array.isArray(body.ingredients) ? { ingredients: body.ingredients } : {}),
+            },
+            currentUser.id
+          );
+          sendJson(res, 200, updated);
+          return;
+        }
+        if (method === 'DELETE') {
+          sendJson(res, 200, service.deleteRecipe(recipeId, currentUser.id));
+          return;
+        }
       }
 
       // ─── Receipts, OCR & Price History ────────────────────────

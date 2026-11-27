@@ -161,7 +161,7 @@ async function runTests() {
     assert.equal(init.result.serverInfo.name, 'grocygo-mcp');
 
     const toolsList = await mcpCall(2, 'tools/list');
-    assert.equal(toolsList.result.tools.length, 7);
+    assert.equal(toolsList.result.tools.length, 9);
 
     const summary = await mcpCall(3, 'tools/call', { name: 'inventory_summary', arguments: {} });
     const summaryText: string = summary.result.content[0].text;
@@ -532,7 +532,7 @@ async function runTests() {
     assert.equal(enabledWrite.write_enabled, true);
 
     const rwTools = await mcpCall(21, 'tools/list');
-    assert.equal(rwTools.result.tools.length, 11);
+    assert.equal(rwTools.result.tools.length, 16);
 
     // AI creates group and assigns item to group
     const createdGrp = await mcpCall(22, 'tools/call', {
@@ -581,7 +581,7 @@ async function runTests() {
       body: JSON.stringify({ read_enabled: true, write_enabled: false }),
     });
     const readOnlyAgain = await mcpCall(28, 'tools/list');
-    assert.equal(readOnlyAgain.result.tools.length, 7);
+    assert.equal(readOnlyAgain.result.tools.length, 9);
 
     // 18. Remove product & shelf photos via UI endpoints (clears DB, deletes files, logs activity)
     const delProdPhoto = await fetch(`${base}/api/photos/product/${prodId}`, {
@@ -664,7 +664,7 @@ async function runTests() {
       body: JSON.stringify({ read_enabled: true, write_enabled: true, delete_enabled: false }),
     });
     const writeNoDelTools = await mcpCall(30, 'tools/list');
-    assert.equal(writeNoDelTools.result.tools.length, 11);
+    assert.equal(writeNoDelTools.result.tools.length, 16);
     const blockedDelete = await mcpCall(31, 'tools/call', {
       name: 'delete_group',
       arguments: { group_name: 'Dry Goods' },
@@ -679,7 +679,7 @@ async function runTests() {
       body: JSON.stringify({ delete_enabled: true }),
     });
     const allMcpTools = await mcpCall(32, 'tools/list');
-    assert.equal(allMcpTools.result.tools.length, 14);
+    assert.equal(allMcpTools.result.tools.length, 20);
     const deletedGrp = await mcpCall(33, 'tools/call', {
       name: 'delete_group',
       arguments: { group_name: 'Dry Goods' },
@@ -1180,7 +1180,100 @@ async function runTests() {
       body: JSON.stringify({ amount: 1, best_before_date: '2026-12-01', note: '' }),
     });
 
-    console.log('ALL SERVER v2.3.6 TESTS PASSED!');
+    // 32. Recipes REST + MCP (create, list urgent sort, get, edit, add missing to shop, delete)
+    await fetch(`${base}/api/mcp/settings`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ read_enabled: true, write_enabled: true, delete_enabled: true }),
+    });
+
+    const mcpCreateRec = await fetch(`${base}/mcp`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 801,
+        method: 'tools/call',
+        params: {
+          name: 'create_recipe',
+          arguments: {
+            name: 'Creamy Tomato Soup',
+            description: 'Comfort soup',
+            servings: 4,
+            prep_minutes: 10,
+            cook_minutes: 25,
+            tags: 'Dinner, Soup',
+            instructions: 'Simmer tomatoes and stir in milk.',
+            ingredients: [
+              { product_id: prodId, ingredient_name: 'Organic Whole Milk', amount: 1, unit: 'cup' },
+              { ingredient_name: 'Crushed Tomatoes', amount: 2, unit: 'cans' },
+            ],
+          },
+        },
+      }),
+    }).then((r) => r.json());
+    assert.ok(!mcpCreateRec.result.isError, JSON.stringify(mcpCreateRec));
+    assert.ok(mcpCreateRec.result.content[0].text.includes('Creamy Tomato Soup'));
+
+    const recipesList = await fetch(`${base}/api/recipes?sort=urgent`, { headers }).then((r) => r.json());
+    assert.equal(recipesList.length, 1);
+    assert.equal(recipesList[0].in_stock_count, 1);
+    assert.equal(recipesList[0].missing_count, 1);
+    assert.equal(recipesList[0].coverage_pct, 50);
+
+    const recId = recipesList[0].id;
+    const mcpGetRec = await fetch(`${base}/mcp`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 802,
+        method: 'tools/call',
+        params: { name: 'get_recipe', arguments: { recipe_id: recId } },
+      }),
+    }).then((r) => r.json());
+    assert.ok(mcpGetRec.result.content[0].text.includes('IN STOCK'));
+    assert.ok(mcpGetRec.result.content[0].text.includes('MISSING'));
+
+    const shopAddRec = await fetch(`${base}/api/recipes/${recId}/add-missing-to-shopping`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({}),
+    }).then((r) => r.json());
+    assert.equal(shopAddRec.added, 1);
+    assert.equal(shopAddRec.items[0], 'Crushed Tomatoes');
+
+    const mcpUpdateRec = await fetch(`${base}/mcp`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 803,
+        method: 'tools/call',
+        params: {
+          name: 'update_recipe',
+          arguments: { recipe_id: recId, new_name: 'Roasted Tomato Soup', servings: 6 },
+        },
+      }),
+    }).then((r) => r.json());
+    assert.ok(mcpUpdateRec.result.content[0].text.includes('Roasted Tomato Soup'));
+
+    const mcpDelRec = await fetch(`${base}/mcp`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 804,
+        method: 'tools/call',
+        params: { name: 'delete_recipe', arguments: { recipe_id: recId } },
+      }),
+    }).then((r) => r.json());
+    assert.ok(mcpDelRec.result.content[0].text.includes('Deleted recipe'));
+
+    const recipesAfter = await fetch(`${base}/api/recipes`, { headers }).then((r) => r.json());
+    assert.equal(recipesAfter.length, 0);
+
+    console.log('ALL SERVER v2.4.0 TESTS PASSED!');
     console.log('\nSample compact MCP inventory_summary output:\n' + summaryText);
     console.log('\nSample compact MCP search_inventory output:\n' + searchText);
   } finally {

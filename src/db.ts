@@ -227,6 +227,33 @@ export function initDatabase(dataDir: string): DbContext {
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS recipes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      description TEXT DEFAULT '',
+      instructions TEXT DEFAULT '',
+      servings REAL NOT NULL DEFAULT 2,
+      prep_minutes INTEGER DEFAULT NULL,
+      cook_minutes INTEGER DEFAULT NULL,
+      tags TEXT DEFAULT '',
+      source_url TEXT DEFAULT '',
+      photo_file_name TEXT DEFAULT NULL,
+      created_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      row_created_timestamp TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS recipe_ingredients (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      recipe_id INTEGER NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,
+      product_id INTEGER DEFAULT NULL REFERENCES products(id) ON DELETE SET NULL,
+      ingredient_name TEXT NOT NULL,
+      amount REAL NOT NULL DEFAULT 1,
+      unit TEXT DEFAULT '',
+      note TEXT DEFAULT '',
+      optional INTEGER NOT NULL DEFAULT 0
+    );
+
     CREATE INDEX IF NOT EXISTS idx_stock_product ON stock(product_id);
     CREATE INDEX IF NOT EXISTS idx_stock_location ON stock(location_id);
     CREATE INDEX IF NOT EXISTS idx_barcodes_code ON product_barcodes(barcode);
@@ -235,6 +262,8 @@ export function initDatabase(dataDir: string): DbContext {
     CREATE INDEX IF NOT EXISTS idx_notifications_id ON notifications(id DESC);
     CREATE INDEX IF NOT EXISTS idx_receipt_items_receipt ON receipt_items(receipt_id);
     CREATE INDEX IF NOT EXISTS idx_price_history_product ON price_history(product_id, purchased_date DESC);
+    CREATE INDEX IF NOT EXISTS idx_recipe_ingredients_recipe ON recipe_ingredients(recipe_id);
+    CREATE INDEX IF NOT EXISTS idx_recipe_ingredients_product ON recipe_ingredients(product_id);
   `);
 
   // Safe migrations for existing databases

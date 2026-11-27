@@ -2940,4 +2940,498 @@ export class InventoryService {
 
     return { purchased };
   }
+
+  // ─── Recipes & Meal Planning ─────────────────────────────────
+
+  private resolveProductIdByName(name: string): number | null {
+    const clean = name.trim().toLowerCase();
+    if (!clean) return null;
+    const exact = this.db
+      .prepare('SELECT id FROM products WHERE LOWER(name) = ? LIMIT 1')
+      .get(clean) as { id: number } | undefined;
+    if (exact) return exact.id;
+    // Try substring match when query is specific enough (>= 4 chars)
+    if (clean.length >= 4) {
+      const partial = this.db
+        .prepare('SELECT id FROM products WHERE LOWER(name) LIKE ? ORDER BY LENGTH(name) ASC LIMIT 1')
+        .get(`%${clean}%`) as { id: number } | undefined;
+      if (partial) return partial.id;
+    }
+    return null;
+  }
+
+  private enrichRecipes(recipeRows: any[]) {
+    if (recipeRows.length === 0) return [];
+    const alertCfg = this.getAlertSettings();
+    const dueSoonDays = alertCfg.expiring_soon_days;
+    const today = todayIso();
+    const soonCutoff = addDaysIso(dueSoonDays);
+
+    const stockOverview = this.getStockOverview();
+    const stockByProductId = new Map<number, any>(
+      stockOverview.map((s) => [Number(s.product_id), s])
+    );
+    const productsAll = this.db
+      .prepare('SELECT id, name, location_id, picture_file_name FROM products')
+      .all() as Array<{ id: number; name: string; location_id: number; picture_file_name: string | null }>;
+    const productById = new Map(productsAll.map((p) => [p.id, p]));
+    const productByLowerName = new Map(productsAll.map((p) => [p.name.trim().toLowerCase(), p]));
+
+    const allIngs = this.db
+      .prepare('SELECT * FROM recipe_ingredients ORDER BY id ASC')
+      .all() as any[];
+    const ingsByRecipe = new Map<number, any[]>();
+    for (const ing of allIngs) {
+      const arr = ingsByRecipe.get(ing.recipe_id) || [];
+      arr.push(ing);
+      ingsByRecipe.set(ing.recipe_id, arr);
+    }
+
+    return recipeRows.map((r) => {
+      const rawIngs = ingsByRecipe.get(r.id) || [];
+      let inStockCount = 0;
+      let missingCount = 0;
+      let urgentCount = 0;
+      let overdueCount = 0;
+      let dueSoonCount = 0;
+      let openedCount = 0;
+      let urgencyScore = 0;
+
+      const ingredients = rawIngs.map((ing) => {
+        let linkedProd = ing.product_id ? productById.get(Number(ing.product_id)) : undefined;
+        let autoMatched = false;
+        if (!linkedProd && ing.ingredient_name) {
+          const byName = productByLowerName.get(String(ing.ingredient_name).trim().toLowerCase());
+          if (byName) {
+            linkedProd = byName;
+            autoMatched = true;
+          }
+        }
+        const st = linkedProd ? stockByProductId.get(linkedProd.id) : undefined;
+        const stockAmount = st ? Number(st.amount || 0) : 0;
+        const inStock = stockAmount > 0;
+        const isOptional = Boolean(ing.optional);
+
+        let dueStatus: 'overdue' | 'soon' | 'opened' | 'fresh' | 'none' = 'none';
+        let bestBefore: string | null = null;
+
+        if (inStock && st) {
+          inStockCount++;
+          const bbd = st.best_before_date && st.best_before_date !== NEVER_EXPIRES ? st.best_before_date : null;
+          bestBefore = bbd;
+          const isOpened = Number(st.amount_opened || 0) > 0;
+          const openedExpired = Boolean(st.opened_use_by_date && st.opened_use_by_date <= today);
+          if ((bbd && bbd < today) || openedExpired) {
+            dueStatus = 'overdue';
+            overdueCount++;
+            urgentCount++;
+            urgencyScore += 5;
+          } else if (bbd && bbd <= soonCutoff) {
+            dueStatus = 'soon';
+            dueSoonCount++;
+            urgentCount++;
+            urgencyScore += 3;
+          } else if (isOpened) {
+            dueStatus = 'opened';
+            openedCount++;
+            urgentCount++;
+            urgencyScore += 2;
+          } else {
+            dueStatus = 'fresh';
+          }
+        } else if (!isOptional) {
+          missingCount++;
+        }
+
+        return {
+          id: Number(ing.id),
+          recipe_id: Number(ing.recipe_id),
+          product_id: linkedProd ? linkedProd.id : null,
+          product_name: linkedProd ? linkedProd.name : null,
+          auto_matched: autoMatched,
+          ingredient_name: String(ing.ingredient_name || linkedProd?.name || ''),
+          amount: Number(ing.amount || 1),
+          unit: String(ing.unit || ''),
+          note: String(ing.note || ''),
+          optional: isOptional,
+          in_stock: inStock,
+          stock_amount: stockAmount,
+          best_before_date: bestBefore,
+          due_status: dueStatus,
+        };
+      });
+
+      const requiredTotal = ingredients.filter((i) => !i.optional).length;
+      const requiredInStock = ingredients.filter((i) => !i.optional && i.in_stock).length;
+      const coveragePct =
+        requiredTotal > 0 ? Math.round((requiredInStock / requiredTotal) * 100) : ingredients.length > 0 ? 100 : 0;
+
+      return {
+        id: Number(r.id),
+        name: String(r.name || ''),
+        description: String(r.description || ''),
+        instructions: String(r.instructions || ''),
+        servings: Number(r.servings || 2),
+        prep_minutes: r.prep_minutes != null ? Number(r.prep_minutes) : null,
+        cook_minutes: r.cook_minutes != null ? Number(r.cook_minutes) : null,
+        tags: String(r.tags || ''),
+        source_url: String(r.source_url || ''),
+        photo_file_name: r.photo_file_name || null,
+        row_created_timestamp: r.row_created_timestamp,
+        updated_at: r.updated_at,
+        total_ingredients: ingredients.length,
+        in_stock_count: inStockCount,
+        missing_count: missingCount,
+        coverage_pct: coveragePct,
+        urgent_ingredient_count: urgentCount,
+        overdue_ingredient_count: overdueCount,
+        due_soon_ingredient_count: dueSoonCount,
+        opened_ingredient_count: openedCount,
+        urgency_score: urgencyScore,
+        ingredients,
+      };
+    });
+  }
+
+  listRecipes(opts?: { sort?: string; q?: string }) {
+    const rows = this.db.prepare('SELECT * FROM recipes ORDER BY id DESC').all() as any[];
+    let enriched = this.enrichRecipes(rows);
+
+    const q = (opts?.q || '').trim().toLowerCase();
+    if (q) {
+      enriched = enriched.filter(
+        (r) =>
+          r.name.toLowerCase().includes(q) ||
+          r.description.toLowerCase().includes(q) ||
+          r.tags.toLowerCase().includes(q) ||
+          r.ingredients.some(
+            (i) =>
+              i.ingredient_name.toLowerCase().includes(q) ||
+              (i.product_name && i.product_name.toLowerCase().includes(q))
+          )
+      );
+    }
+
+    const sort = (opts?.sort || 'urgent').toLowerCase();
+    if (sort === 'coverage') {
+      enriched.sort(
+        (a, b) =>
+          b.coverage_pct - a.coverage_pct ||
+          b.urgency_score - a.urgency_score ||
+          a.name.localeCompare(b.name)
+      );
+    } else if (sort === 'name') {
+      enriched.sort((a, b) => a.name.localeCompare(b.name));
+    } else if (sort === 'recent') {
+      enriched.sort((a, b) => b.id - a.id);
+    } else {
+      // 'urgent': prioritize recipes using the most expired / due-soon / opened ingredients
+      enriched.sort(
+        (a, b) =>
+          b.urgency_score - a.urgency_score ||
+          b.urgent_ingredient_count - a.urgent_ingredient_count ||
+          b.coverage_pct - a.coverage_pct ||
+          a.name.localeCompare(b.name)
+      );
+    }
+
+    return enriched;
+  }
+
+  getRecipe(recipeId: number) {
+    const row = this.db.prepare('SELECT * FROM recipes WHERE id = ?').get(recipeId);
+    if (!row) return null;
+    return this.enrichRecipes([row])[0] || null;
+  }
+
+  createRecipe(
+    payload: {
+      name: string;
+      description?: string;
+      instructions?: string;
+      servings?: number;
+      prep_minutes?: number | null;
+      cook_minutes?: number | null;
+      tags?: string;
+      source_url?: string;
+      photo_file_name?: string | null;
+      ingredients?: Array<{
+        product_id?: number | null;
+        product_name?: string;
+        ingredient_name?: string;
+        amount?: number;
+        unit?: string;
+        note?: string;
+        optional?: boolean | number;
+      }>;
+    },
+    userId?: number | null
+  ) {
+    const name = String(payload.name || '').trim();
+    if (!name) throw new Error('Recipe name is required');
+
+    const servings =
+      payload.servings !== undefined && Number.isFinite(Number(payload.servings)) && Number(payload.servings) > 0
+        ? Number(payload.servings)
+        : 2;
+    const prepMinutes =
+      payload.prep_minutes !== undefined && payload.prep_minutes !== null && Number.isFinite(Number(payload.prep_minutes))
+        ? Math.max(0, Math.round(Number(payload.prep_minutes)))
+        : null;
+    const cookMinutes =
+      payload.cook_minutes !== undefined && payload.cook_minutes !== null && Number.isFinite(Number(payload.cook_minutes))
+        ? Math.max(0, Math.round(Number(payload.cook_minutes)))
+        : null;
+
+    const info = this.db
+      .prepare(
+        `INSERT INTO recipes
+           (name, description, instructions, servings, prep_minutes, cook_minutes, tags, source_url, photo_file_name, created_by_user_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        name,
+        String(payload.description || '').trim(),
+        String(payload.instructions || '').trim(),
+        servings,
+        prepMinutes,
+        cookMinutes,
+        String(payload.tags || '').trim(),
+        String(payload.source_url || '').trim(),
+        payload.photo_file_name || null,
+        userId ?? null
+      );
+
+    const recipeId = Number(info.lastInsertRowid);
+    this.replaceRecipeIngredients(recipeId, payload.ingredients || []);
+
+    this.logActivity({
+      itemLabel: name,
+      amount: 0,
+      transactionType: 'recipe_create',
+      note: `${(payload.ingredients || []).length} ingredients`,
+      userId,
+    });
+
+    return this.getRecipe(recipeId)!;
+  }
+
+  private replaceRecipeIngredients(
+    recipeId: number,
+    ingredients: Array<{
+      product_id?: number | null;
+      product_name?: string;
+      ingredient_name?: string;
+      amount?: number;
+      unit?: string;
+      note?: string;
+      optional?: boolean | number;
+    }>
+  ) {
+    this.db.prepare('DELETE FROM recipe_ingredients WHERE recipe_id = ?').run(recipeId);
+    const ins = this.db.prepare(
+      `INSERT INTO recipe_ingredients
+         (recipe_id, product_id, ingredient_name, amount, unit, note, optional)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    );
+    for (const raw of ingredients) {
+      let productId: number | null =
+        raw.product_id && Number.isFinite(Number(raw.product_id)) && Number(raw.product_id) > 0
+          ? Number(raw.product_id)
+          : null;
+      const explicitName = String(raw.ingredient_name || raw.product_name || '').trim();
+      if (!productId && (raw.product_name || explicitName)) {
+        productId = this.resolveProductIdByName(String(raw.product_name || explicitName));
+      }
+      let prodName = explicitName;
+      if (productId) {
+        const p = this.db
+          .prepare('SELECT id, name FROM products WHERE id = ?')
+          .get(productId) as { id: number; name: string } | undefined;
+        if (!p) {
+          productId = null;
+        } else if (!prodName) {
+          prodName = p.name;
+        }
+      }
+      if (!prodName) continue;
+      const amt =
+        raw.amount !== undefined && Number.isFinite(Number(raw.amount)) && Number(raw.amount) > 0
+          ? Number(raw.amount)
+          : 1;
+      ins.run(
+        recipeId,
+        productId,
+        prodName,
+        amt,
+        String(raw.unit || '').trim(),
+        String(raw.note || '').trim(),
+        raw.optional ? 1 : 0
+      );
+    }
+  }
+
+  updateRecipe(
+    recipeId: number,
+    payload: {
+      name?: string;
+      description?: string;
+      instructions?: string;
+      servings?: number;
+      prep_minutes?: number | null;
+      cook_minutes?: number | null;
+      tags?: string;
+      source_url?: string;
+      photo_file_name?: string | null;
+      ingredients?: Array<{
+        product_id?: number | null;
+        product_name?: string;
+        ingredient_name?: string;
+        amount?: number;
+        unit?: string;
+        note?: string;
+        optional?: boolean | number;
+      }>;
+    },
+    userId?: number | null
+  ) {
+    const existing = this.db.prepare('SELECT * FROM recipes WHERE id = ?').get(recipeId) as any;
+    if (!existing) throw new Error(`Recipe #${recipeId} not found`);
+
+    const nextName =
+      payload.name !== undefined ? String(payload.name || '').trim() || existing.name : existing.name;
+    const nextDesc =
+      payload.description !== undefined ? String(payload.description || '').trim() : existing.description;
+    const nextInstr =
+      payload.instructions !== undefined ? String(payload.instructions || '').trim() : existing.instructions;
+    const nextServings =
+      payload.servings !== undefined && Number.isFinite(Number(payload.servings)) && Number(payload.servings) > 0
+        ? Number(payload.servings)
+        : existing.servings;
+    const nextPrep =
+      payload.prep_minutes !== undefined
+        ? payload.prep_minutes === null || !Number.isFinite(Number(payload.prep_minutes))
+          ? null
+          : Math.max(0, Math.round(Number(payload.prep_minutes)))
+        : existing.prep_minutes;
+    const nextCook =
+      payload.cook_minutes !== undefined
+        ? payload.cook_minutes === null || !Number.isFinite(Number(payload.cook_minutes))
+          ? null
+          : Math.max(0, Math.round(Number(payload.cook_minutes)))
+        : existing.cook_minutes;
+    const nextTags = payload.tags !== undefined ? String(payload.tags || '').trim() : existing.tags;
+    const nextSource =
+      payload.source_url !== undefined ? String(payload.source_url || '').trim() : existing.source_url;
+    const nextPhoto =
+      payload.photo_file_name !== undefined ? payload.photo_file_name : existing.photo_file_name;
+
+    this.db
+      .prepare(
+        `UPDATE recipes
+         SET name = ?, description = ?, instructions = ?, servings = ?,
+             prep_minutes = ?, cook_minutes = ?, tags = ?, source_url = ?,
+             photo_file_name = ?, updated_at = datetime('now')
+         WHERE id = ?`
+      )
+      .run(
+        nextName,
+        nextDesc,
+        nextInstr,
+        nextServings,
+        nextPrep,
+        nextCook,
+        nextTags,
+        nextSource,
+        nextPhoto,
+        recipeId
+      );
+
+    if (payload.photo_file_name !== undefined && existing.photo_file_name && existing.photo_file_name !== nextPhoto) {
+      this.cleanupPhotoIfUnused(existing.photo_file_name);
+    }
+
+    if (Array.isArray(payload.ingredients)) {
+      this.replaceRecipeIngredients(recipeId, payload.ingredients);
+    }
+
+    this.logActivity({
+      itemLabel: nextName,
+      amount: 0,
+      transactionType: 'recipe_edit',
+      userId,
+    });
+
+    return this.getRecipe(recipeId)!;
+  }
+
+  deleteRecipe(recipeId: number, userId?: number | null) {
+    const existing = this.db.prepare('SELECT * FROM recipes WHERE id = ?').get(recipeId) as any;
+    if (!existing) throw new Error(`Recipe #${recipeId} not found`);
+
+    this.db.prepare('DELETE FROM recipes WHERE id = ?').run(recipeId);
+    if (existing.photo_file_name) {
+      this.cleanupPhotoIfUnused(existing.photo_file_name);
+    }
+    this.logActivity({
+      itemLabel: existing.name,
+      amount: 0,
+      transactionType: 'recipe_delete',
+      userId,
+    });
+    return { deleted: true, id: recipeId, name: existing.name };
+  }
+
+  addRecipeMissingToShopping(
+    recipeId: number,
+    ingredientIds?: number[],
+    userId?: number | null
+  ): { added: number; items: string[] } {
+    const recipe = this.getRecipe(recipeId);
+    if (!recipe) throw new Error(`Recipe #${recipeId} not found`);
+
+    const openShopping = this.db
+      .prepare('SELECT product_id, LOWER(COALESCE(note, \'\')) AS note_lower FROM shopping_list WHERE done = 0')
+      .all() as Array<{ product_id: number | null; note_lower: string }>;
+    const openProdIds = new Set(openShopping.map((s) => s.product_id).filter(Boolean));
+    const openNotes = new Set(openShopping.map((s) => s.note_lower).filter(Boolean));
+
+    const targets =
+      Array.isArray(ingredientIds) && ingredientIds.length > 0
+        ? recipe.ingredients.filter((i) => ingredientIds.includes(i.id))
+        : recipe.ingredients.filter((i) => !i.in_stock && !i.optional);
+
+    const addedItems: string[] = [];
+    for (const ing of targets) {
+      if (ing.product_id && openProdIds.has(ing.product_id)) continue;
+      const displayLabel = ing.product_name || ing.ingredient_name;
+      const customNote = ing.product_id
+        ? `For ${recipe.name}${ing.unit ? ` (${ing.amount} ${ing.unit})` : ''}`
+        : `${displayLabel}${ing.unit ? ` (${ing.amount} ${ing.unit})` : ''} — ${recipe.name}`;
+      if (!ing.product_id && openNotes.has(customNote.toLowerCase())) continue;
+
+      this.db
+        .prepare(
+          `INSERT INTO shopping_list (product_id, note, amount, shopping_list_id, done, added_by_user_id)
+           VALUES (?, ?, ?, 1, 0, ?)`
+        )
+        .run(ing.product_id || null, customNote, Math.max(1, Math.ceil(ing.amount || 1)), userId ?? null);
+
+      if (ing.product_id) openProdIds.add(ing.product_id);
+      else openNotes.add(customNote.toLowerCase());
+
+      this.logActivity({
+        productId: ing.product_id || null,
+        itemLabel: displayLabel,
+        amount: Math.max(1, Math.ceil(ing.amount || 1)),
+        transactionType: 'shopping_add',
+        note: `Recipe: ${recipe.name}`,
+        userId,
+      });
+      this.recordShoppingListNotification(userId ?? null, displayLabel);
+      addedItems.push(displayLabel);
+    }
+
+    return { added: addedItems.length, items: addedItems };
+  }
 }

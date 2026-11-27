@@ -114,6 +114,35 @@ const MCP_READ_TOOLS = [
       additionalProperties: false,
     },
   },
+  {
+    name: 'list_recipes',
+    description:
+      'List recipes with in-stock coverage and expiring/urgent ingredient counts. Sort by urgent (default, uses most expiring/overdue/opened items first), coverage, name, or recent.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sort: {
+          type: 'string',
+          enum: ['urgent', 'coverage', 'name', 'recent'],
+          description: 'Sort order (default urgent).',
+        },
+        query: { type: 'string', description: 'Optional search substring across recipe name, tags, or ingredients.' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'get_recipe',
+    description: 'Get full recipe details, instructions, and ingredient stock/expiry status by recipe_id or name.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        recipe_id: { type: 'integer', description: 'Numeric recipe ID.' },
+        name: { type: 'string', description: 'Recipe name (exact or partial match).' },
+      },
+      additionalProperties: false,
+    },
+  },
 ];
 
 const MCP_WRITE_TOOLS = [
@@ -202,6 +231,92 @@ const MCP_WRITE_TOOLS = [
       additionalProperties: false,
     },
   },
+  {
+    name: 'create_recipe',
+    description:
+      'Create a new recipe with ingredients linked to inventory products (provide product_id or product_name; server auto-matches existing inventory items).',
+    inputSchema: {
+      type: 'object',
+      required: ['name'],
+      properties: {
+        name: { type: 'string', description: 'Recipe title.' },
+        description: { type: 'string', description: 'Short summary or subtitle.' },
+        instructions: { type: 'string', description: 'Step-by-step cooking instructions.' },
+        servings: { type: 'number', description: 'Number of servings (default 2).' },
+        prep_minutes: { type: 'integer', description: 'Prep time in minutes.' },
+        cook_minutes: { type: 'integer', description: 'Cook time in minutes.' },
+        tags: { type: 'string', description: 'Comma-separated tags (e.g. "Dinner, Chicken, Quick").' },
+        source_url: { type: 'string', description: 'Optional source URL or cookbook reference.' },
+        ingredients: {
+          type: 'array',
+          description: 'List of ingredients. Pass product_id or product_name to link to inventory.',
+          items: {
+            type: 'object',
+            properties: {
+              product_id: { type: 'integer', description: 'Existing inventory product ID (optional).' },
+              product_name: { type: 'string', description: 'Existing inventory product name to auto-link (optional).' },
+              ingredient_name: { type: 'string', description: 'Display name of ingredient.' },
+              amount: { type: 'number', description: 'Quantity needed (default 1).' },
+              unit: { type: 'string', description: 'Measurement unit (e.g. lb, cup, tbsp).' },
+              note: { type: 'string', description: 'Prep note (e.g. diced, melted).' },
+              optional: { type: 'boolean', description: 'Whether ingredient is optional (default false).' },
+            },
+            additionalProperties: false,
+          },
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'update_recipe',
+    description:
+      'Edit an existing recipe by recipe_id (or exact name). Only provided fields are changed; passing ingredients replaces the ingredient list.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        recipe_id: { type: 'integer', description: 'Recipe ID to update.' },
+        name: { type: 'string', description: 'Current recipe name (if recipe_id omitted) or new name.' },
+        new_name: { type: 'string', description: 'New recipe title (use when renaming).' },
+        description: { type: 'string' },
+        instructions: { type: 'string' },
+        servings: { type: 'number' },
+        prep_minutes: { type: 'integer' },
+        cook_minutes: { type: 'integer' },
+        tags: { type: 'string' },
+        source_url: { type: 'string' },
+        ingredients: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              product_id: { type: 'integer' },
+              product_name: { type: 'string' },
+              ingredient_name: { type: 'string' },
+              amount: { type: 'number' },
+              unit: { type: 'string' },
+              note: { type: 'string' },
+              optional: { type: 'boolean' },
+            },
+            additionalProperties: false,
+          },
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'add_recipe_missing_to_shopping',
+    description: 'Add all missing (out-of-stock, non-optional) ingredients of a recipe to the shopping list.',
+    inputSchema: {
+      type: 'object',
+      required: ['recipe_id'],
+      properties: {
+        recipe_id: { type: 'integer', description: 'Recipe ID.' },
+      },
+      additionalProperties: false,
+    },
+  },
 ];
 
 const MCP_DELETE_TOOLS = [
@@ -239,6 +354,18 @@ const MCP_DELETE_TOOLS = [
       properties: {
         id: { type: 'integer', description: 'Product ID to delete.' },
         name: { type: 'string', description: 'Product name to delete (exact match).' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'delete_recipe',
+    description: 'Permanently delete a recipe by recipe_id or exact name.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        recipe_id: { type: 'integer', description: 'Recipe ID to delete.' },
+        name: { type: 'string', description: 'Recipe name to delete (exact match).' },
       },
       additionalProperties: false,
     },
@@ -1025,6 +1152,146 @@ function executeTool(
       userId: actingUserId,
     });
     return textResult(`Deleted product #${target.id}: ${target.name}`);
+  }
+
+  // ─── RECIPES TOOLS (READ / WRITE / DELETE) ──────────────────
+  if (name === 'list_recipes') {
+    const recipes = service.listRecipes({
+      sort: typeof args.sort === 'string' ? args.sort : 'urgent',
+      q: typeof args.query === 'string' ? args.query : '',
+    });
+    if (recipes.length === 0) return textResult('No recipes found.');
+    const lines = recipes.map((r) => {
+      const urg =
+        r.urgent_ingredient_count > 0 ? ` | urgent:${r.urgent_ingredient_count}` : '';
+      return `#${r.id} ${r.name} | ${r.in_stock_count}/${r.total_ingredients} in stock (${r.coverage_pct}%)${urg}${
+        r.tags ? ` | [${r.tags}]` : ''
+      }`;
+    });
+    return textResult(lines.join('\n'));
+  }
+
+  if (name === 'get_recipe') {
+    let recipe: ReturnType<InventoryService['getRecipe']> = null;
+    if (typeof args.recipe_id === 'number' && args.recipe_id > 0) {
+      recipe = service.getRecipe(args.recipe_id);
+    } else if (typeof args.name === 'string' && args.name.trim()) {
+      const matches = service.listRecipes({ q: args.name.trim() });
+      recipe =
+        matches.find((r) => r.name.toLowerCase() === args.name.trim().toLowerCase()) ||
+        matches[0] ||
+        null;
+    }
+    if (!recipe) return textResult('Recipe not found.', true);
+    const lines: string[] = [
+      `#${recipe.id} ${recipe.name} (${recipe.servings} servings${
+        recipe.prep_minutes ? `, prep ${recipe.prep_minutes}m` : ''
+      }${recipe.cook_minutes ? `, cook ${recipe.cook_minutes}m` : ''})`,
+      `Stock: ${recipe.in_stock_count}/${recipe.total_ingredients} (${recipe.coverage_pct}%)${
+        recipe.urgent_ingredient_count > 0 ? ` | ${recipe.urgent_ingredient_count} urgent/expiring` : ''
+      }`,
+    ];
+    if (recipe.tags) lines.push(`Tags: ${recipe.tags}`);
+    if (recipe.description) lines.push(`Description: ${recipe.description}`);
+    lines.push('Ingredients:');
+    for (const ing of recipe.ingredients) {
+      const status = ing.in_stock
+        ? `IN STOCK (${ing.stock_amount}${ing.due_status !== 'fresh' && ing.due_status !== 'none' ? `, ${ing.due_status}` : ''}${
+            ing.best_before_date ? `, exp ${ing.best_before_date}` : ''
+          })`
+        : ing.optional
+        ? 'OPTIONAL (missing)'
+        : 'MISSING';
+      const prodTag = ing.product_id ? ` [prod #${ing.product_id}]` : '';
+      lines.push(
+        `- ${ing.amount}${ing.unit ? ' ' + ing.unit : ''} ${ing.ingredient_name}${
+          ing.note ? ` (${ing.note})` : ''
+        }${prodTag} — ${status}`
+      );
+    }
+    if (recipe.instructions) {
+      lines.push('Instructions:\n' + recipe.instructions);
+    }
+    return textResult(lines.join('\n'));
+  }
+
+  if (name === 'create_recipe') {
+    const created = service.createRecipe(
+      {
+        name: String(args.name || ''),
+        description: typeof args.description === 'string' ? args.description : '',
+        instructions: typeof args.instructions === 'string' ? args.instructions : '',
+        servings: typeof args.servings === 'number' ? args.servings : 2,
+        prep_minutes: typeof args.prep_minutes === 'number' ? args.prep_minutes : null,
+        cook_minutes: typeof args.cook_minutes === 'number' ? args.cook_minutes : null,
+        tags: typeof args.tags === 'string' ? args.tags : '',
+        source_url: typeof args.source_url === 'string' ? args.source_url : '',
+        ingredients: Array.isArray(args.ingredients) ? args.ingredients : [],
+      },
+      actingUserId
+    );
+    const linked = created.ingredients.filter((i) => i.product_id).length;
+    return textResult(
+      `Created recipe #${created.id}: ${created.name} (${created.total_ingredients} ingredients, ${linked} linked to inventory, ${created.in_stock_count} in stock)`
+    );
+  }
+
+  if (name === 'update_recipe') {
+    let targetId: number | null =
+      typeof args.recipe_id === 'number' && args.recipe_id > 0 ? args.recipe_id : null;
+    if (!targetId && typeof args.name === 'string' && args.name.trim()) {
+      const row = db
+        .prepare('SELECT id FROM recipes WHERE LOWER(name) = LOWER(?) LIMIT 1')
+        .get(args.name.trim()) as { id: number } | undefined;
+      if (row) targetId = row.id;
+    }
+    if (!targetId) return textResult('Recipe not found. Provide recipe_id or exact name.', true);
+    const updated = service.updateRecipe(
+      targetId,
+      {
+        ...(typeof args.new_name === 'string' && args.new_name.trim()
+          ? { name: args.new_name.trim() }
+          : typeof args.name === 'string' && args.recipe_id
+          ? { name: args.name.trim() }
+          : {}),
+        ...(args.description !== undefined ? { description: String(args.description) } : {}),
+        ...(args.instructions !== undefined ? { instructions: String(args.instructions) } : {}),
+        ...(typeof args.servings === 'number' ? { servings: args.servings } : {}),
+        ...(args.prep_minutes !== undefined ? { prep_minutes: args.prep_minutes } : {}),
+        ...(args.cook_minutes !== undefined ? { cook_minutes: args.cook_minutes } : {}),
+        ...(args.tags !== undefined ? { tags: String(args.tags) } : {}),
+        ...(args.source_url !== undefined ? { source_url: String(args.source_url) } : {}),
+        ...(Array.isArray(args.ingredients) ? { ingredients: args.ingredients } : {}),
+      },
+      actingUserId
+    );
+    return textResult(
+      `Updated recipe #${updated.id}: ${updated.name} (${updated.in_stock_count}/${updated.total_ingredients} in stock)`
+    );
+  }
+
+  if (name === 'add_recipe_missing_to_shopping') {
+    const recipeId = Number(args.recipe_id);
+    if (!Number.isFinite(recipeId) || recipeId <= 0) {
+      return textResult('Provide a valid recipe_id.', true);
+    }
+    const res = service.addRecipeMissingToShopping(recipeId, undefined, actingUserId);
+    if (res.added === 0) return textResult('All required ingredients are already in stock or on the shopping list.');
+    return textResult(`Added ${res.added} missing ingredient(s) to shopping list: ${res.items.join(', ')}`);
+  }
+
+  if (name === 'delete_recipe') {
+    let targetId: number | null =
+      typeof args.recipe_id === 'number' && args.recipe_id > 0 ? args.recipe_id : null;
+    if (!targetId && typeof args.name === 'string' && args.name.trim()) {
+      const row = db
+        .prepare('SELECT id FROM recipes WHERE LOWER(name) = LOWER(?) LIMIT 1')
+        .get(args.name.trim()) as { id: number } | undefined;
+      if (row) targetId = row.id;
+    }
+    if (!targetId) return textResult('Recipe not found. Provide recipe_id or exact name.', true);
+    const del = service.deleteRecipe(targetId, actingUserId);
+    return textResult(`Deleted recipe #${del.id}: ${del.name}`);
   }
 
   return textResult(`Unknown tool: ${name}`, true);

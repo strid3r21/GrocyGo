@@ -291,6 +291,7 @@ export function renderWebUiHtml(): string {
     </div>
     <nav id="navTabs" class="hidden" aria-label="Main navigation">
       <button data-tab="inventory" class="active">Inventory</button>
+      <button data-tab="recipes">Recipes</button>
       <button data-tab="stats">Stats</button>
       <button data-tab="receipts">Receipts</button>
       <button data-tab="shopping">Shopping</button>
@@ -393,6 +394,33 @@ export function renderWebUiHtml(): string {
         </div>
 
         <div class="table-wrap" id="inventoryTableWrap"></div>
+      </div>
+
+      <!-- Recipes Tab -->
+      <div id="tab-recipes" class="hidden">
+        <div class="card" style="padding:14px;">
+          <div class="between" style="margin-bottom:10px;gap:10px;flex-wrap:wrap;">
+            <div>
+              <h3 style="margin:0;">Meals &amp; Recipes</h3>
+              <div class="muted">See what you can cook with your stock, prioritize expiring ingredients, and add missing items to shopping.</div>
+            </div>
+            <div class="row" style="gap:8px;">
+              <button id="openDiscoverRecipesBtn" class="sm" type="button">Discover (TheMealDB)</button>
+              <button id="newRecipeBtn" class="sm primary" type="button">+ Add Recipe</button>
+            </div>
+          </div>
+          <div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+            <input id="recipeSearchInput" placeholder="Search recipes, tags, or ingredients..." style="flex:1;min-width:200px;" />
+            <select id="recipeSortSelect" style="width:auto;min-width:190px;">
+              <option value="urgent">Sort: Use Expiring First</option>
+              <option value="coverage">Sort: Most In Stock</option>
+              <option value="name">Sort: Name (A–Z)</option>
+              <option value="recent">Sort: Recently Added</option>
+            </select>
+          </div>
+          <div id="recipesStatus" class="hidden"></div>
+          <div id="recipesList" style="display:grid;gap:12px;"></div>
+        </div>
       </div>
 
       <!-- Stats & Insights Tab -->
@@ -931,11 +959,104 @@ export function renderWebUiHtml(): string {
     </div>
   </div>
 
+  <!-- Add / Edit Recipe Modal -->
+  <div id="recipeModal" class="modal">
+    <div class="modal-card" style="max-width:720px;max-height:90vh;overflow-y:auto;">
+      <div class="between" style="margin-bottom:10px;">
+        <h3 style="margin:0;" id="recipeModalTitle">Add Recipe</h3>
+        <button class="sm" type="button" onclick="closeRecipeModal()">Close</button>
+      </div>
+      <div id="recipeModalErr" class="notice err hidden"></div>
+      <div class="field">
+        <label for="recNameInput">Recipe Name *</label>
+        <input id="recNameInput" placeholder="e.g. Garlic Butter Chicken & Rice" />
+      </div>
+      <div class="field">
+        <label for="recDescInput">Short Description (optional)</label>
+        <input id="recDescInput" placeholder="Quick weeknight dinner" />
+      </div>
+      <div class="row" style="gap:8px;">
+        <div class="field" style="flex:1;">
+          <label for="recServingsInput">Servings</label>
+          <input id="recServingsInput" type="number" min="1" step="1" value="2" />
+        </div>
+        <div class="field" style="flex:1;">
+          <label for="recPrepInput">Prep (min)</label>
+          <input id="recPrepInput" type="number" min="0" placeholder="15" />
+        </div>
+        <div class="field" style="flex:1;">
+          <label for="recCookInput">Cook (min)</label>
+          <input id="recCookInput" type="number" min="0" placeholder="25" />
+        </div>
+      </div>
+      <div class="row" style="gap:8px;">
+        <div class="field" style="flex:1;">
+          <label for="recTagsInput">Tags (comma-separated)</label>
+          <input id="recTagsInput" placeholder="Dinner, Chicken, Quick" />
+        </div>
+        <div class="field" style="flex:1;">
+          <label for="recSourceInput">Source URL (optional)</label>
+          <input id="recSourceInput" placeholder="https://..." />
+        </div>
+      </div>
+      <div class="field">
+        <label>Recipe Photo (optional)</label>
+        <div class="row" style="gap:10px;align-items:center;">
+          <img id="recPhotoPreview" class="hidden" style="width:72px;height:72px;object-fit:cover;border-radius:10px;border:1px solid var(--border);" />
+          <input id="recPhotoFileInput" type="file" accept="image/*" style="flex:1;" />
+          <button id="recClearPhotoBtn" type="button" class="sm danger hidden">Remove Photo</button>
+        </div>
+      </div>
+      <div class="field">
+        <div class="between" style="margin-bottom:6px;">
+          <label style="margin:0;">Ingredients (link to inventory items for stock &amp; expiry tracking)</label>
+          <button id="addRecipeIngRowBtn" type="button" class="sm">+ Add Ingredient</button>
+        </div>
+        <div id="recipeIngRows" style="display:grid;gap:6px;"></div>
+      </div>
+      <div class="field">
+        <label for="recInstrInput">Instructions</label>
+        <textarea id="recInstrInput" rows="5" placeholder="Step 1: ..."></textarea>
+      </div>
+      <div class="between" style="margin-top:12px;">
+        <button id="deleteRecipeModalBtn" type="button" class="danger hidden">Delete Recipe</button>
+        <div class="row" style="gap:8px;margin-left:auto;">
+          <button type="button" onclick="closeRecipeModal()">Cancel</button>
+          <button id="saveRecipeBtn" type="button" class="primary">Save Recipe</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Discover Open-Source Recipes (TheMealDB) Modal -->
+  <div id="discoverRecipesModal" class="modal">
+    <div class="modal-card" style="max-width:720px;max-height:90vh;overflow-y:auto;">
+      <div class="between" style="margin-bottom:10px;">
+        <div>
+          <h3 style="margin:0;">Discover Open-Source Recipes</h3>
+          <div class="muted" style="font-size:12px;">Powered by TheMealDB (free open recipe database) — 1-click import with automatic inventory matching.</div>
+        </div>
+        <button class="sm" type="button" onclick="document.getElementById('discoverRecipesModal').classList.remove('open')">Close</button>
+      </div>
+      <div class="row" style="gap:8px;margin-bottom:12px;">
+        <input id="discoverQueryInput" placeholder="Search recipes (e.g. chicken, beef, pasta, soup)..." style="flex:1;" />
+        <button id="discoverSearchBtn" type="button" class="primary">Search</button>
+      </div>
+      <div id="discoverStatus" class="muted" style="margin-bottom:8px;"></div>
+      <div id="discoverResults" style="display:grid;gap:10px;"></div>
+    </div>
+  </div>
+
   <script>
     let apiKey = localStorage.getItem('grocygo_key') || '';
     let currentUser = null;
-    let state = { stock: [], products: [], barcodes: [], groups: [], locations: [], units: [], shopping: [], keys: [], activity: [], users: [], backups: [], receipts: [], mcpSettings: { read_enabled: true, write_enabled: false }, alertSettings: { expiring_soon_enabled: true, expiring_soon_days: 5, expiring_soon_hour: 9, auto_add_below_min_stock: false, last_expiring_soon_notif_date: null }, printerSettings: { bridge_url: '', has_token: false, configured: false }, stats: null };
+    let state = { stock: [], products: [], barcodes: [], groups: [], locations: [], units: [], shopping: [], keys: [], activity: [], users: [], backups: [], receipts: [], recipes: [], mcpSettings: { read_enabled: true, write_enabled: false }, alertSettings: { expiring_soon_enabled: true, expiring_soon_days: 5, expiring_soon_hour: 9, auto_add_below_min_stock: false, last_expiring_soon_notif_date: null }, printerSettings: { bridge_url: '', has_token: false, configured: false }, stats: null };
     let statsDays = 30;
+    let editingRecipeId = null;
+    let editingRecipePhotoBase64 = null;
+    let editingRecipePhotoMime = 'image/jpeg';
+    let editingRecipePhotoCleared = false;
+    let editingRecipeIngredients = [];
     let editingReceiptId = null;
     let editingReceiptPhoto = null;
     let editingReceiptOcr = '';
@@ -1013,7 +1134,8 @@ export function renderWebUiHtml(): string {
     };
 
     async function loadAll() {
-      const [me, stock, products, barcodes, groups, locations, units, shopping, keys, activity, users, backups, receipts, mcpSettings, alertSettings, printerSettings, stats] = await Promise.all([
+      const recSort = (document.getElementById('recipeSortSelect') && document.getElementById('recipeSortSelect').value) || 'urgent';
+      const [me, stock, products, barcodes, groups, locations, units, shopping, keys, activity, users, backups, receipts, recipes, mcpSettings, alertSettings, printerSettings, stats] = await Promise.all([
         api('/api/auth/me'),
         api('/api/stock'),
         api('/api/objects/products'),
@@ -1027,13 +1149,14 @@ export function renderWebUiHtml(): string {
         api('/api/users').catch(() => []),
         api('/api/backups').catch(() => []),
         api('/api/receipts?limit=100').catch(() => []),
+        api('/api/recipes?sort=' + encodeURIComponent(recSort)).catch(() => []),
         api('/api/mcp/settings').catch(() => ({ read_enabled: true, write_enabled: false })),
         api('/api/settings/alerts').catch(() => ({ expiring_soon_enabled: true, expiring_soon_days: 5, expiring_soon_hour: 9, auto_add_below_min_stock: false, last_expiring_soon_notif_date: null })),
         api('/api/settings/printer').catch(() => ({ bridge_url: '', has_token: false, configured: false })),
         api('/api/stats?days=' + statsDays).catch(() => null),
       ]);
       currentUser = me;
-      state = { stock, products, barcodes, groups, locations, units, shopping, keys, activity, users, backups, receipts, mcpSettings, alertSettings, printerSettings, stats };
+      state = { stock, products, barcodes, groups, locations, units, shopping, keys, activity, users, backups, receipts, recipes, mcpSettings, alertSettings, printerSettings, stats };
       const validIds = new Set(products.map((p) => p.id));
       for (const id of [...selectedIds]) {
         if (!validIds.has(id)) selectedIds.delete(id);
@@ -1382,6 +1505,7 @@ export function renderWebUiHtml(): string {
 
       renderStats();
       renderReceipts();
+      renderRecipes();
 
       const mcp = state.mcpSettings || { read_enabled: true, write_enabled: false, delete_enabled: false };
       const readChk = document.getElementById('mcpReadToggle');
@@ -2461,7 +2585,7 @@ export function renderWebUiHtml(): string {
       document.querySelectorAll('#navTabs button[data-tab]').forEach((b) => {
         b.classList.toggle('active', b.dataset.tab === tabName);
       });
-      ['inventory', 'stats', 'receipts', 'shopping', 'labels', 'locations', 'activity', 'users', 'import', 'keys'].forEach((t) => {
+      ['inventory', 'recipes', 'stats', 'receipts', 'shopping', 'labels', 'locations', 'activity', 'users', 'import', 'keys'].forEach((t) => {
         document.getElementById('tab-' + t).classList.toggle('hidden', t !== tabName);
       });
       if (pushUrl) {
@@ -2469,6 +2593,10 @@ export function renderWebUiHtml(): string {
         if (window.location.pathname !== targetPath) {
           history.pushState(null, '', targetPath);
         }
+      }
+      if (tabName === 'recipes') {
+        const sort = document.getElementById('recipeSortSelect').value || 'urgent';
+        api('/api/recipes?sort=' + encodeURIComponent(sort)).then((r) => { state.recipes = r; renderRecipes(); }).catch(() => {});
       }
       if (tabName === 'stats') {
         api('/api/stats?days=' + statsDays).then((s) => { state.stats = s; renderStats(); }).catch(() => {});
@@ -2945,6 +3073,300 @@ export function renderWebUiHtml(): string {
       await loadAll();
     };
 
+    // ─── Recipes & Meals UI ───────────────────────────────────────
+    function renderRecipes() {
+      const listEl = document.getElementById('recipesList');
+      if (!listEl) return;
+      const q = (document.getElementById('recipeSearchInput').value || '').trim().toLowerCase();
+      let rows = (state.recipes || []).slice();
+      if (q) {
+        rows = rows.filter((r) =>
+          r.name.toLowerCase().includes(q) ||
+          (r.description || '').toLowerCase().includes(q) ||
+          (r.tags || '').toLowerCase().includes(q) ||
+          (r.ingredients || []).some((i) => (i.ingredient_name || '').toLowerCase().includes(q))
+        );
+      }
+      if (rows.length === 0) {
+        listEl.innerHTML = '<div class="muted" style="padding:18px;text-align:center;">No recipes yet. Click <strong>+ Add Recipe</strong>, <strong>Discover (TheMealDB)</strong>, or ask your LLM via MCP to add one!</div>';
+        return;
+      }
+      listEl.innerHTML = rows.map((r) => {
+        const imgHtml = r.photo_file_name
+          ? '<img src="' + photoUrl(r.photo_file_name, true) + '" style="width:78px;height:78px;object-fit:cover;border-radius:10px;border:1px solid var(--border);flex-shrink:0;" />'
+          : '<div style="width:78px;height:78px;border-radius:10px;background:var(--bg);border:1px dashed var(--border);display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:11px;flex-shrink:0;">No Photo</div>';
+        const urgTag = r.urgent_ingredient_count > 0
+          ? '<span class="tag warn">' + r.urgent_ingredient_count + ' expiring / open</span>'
+          : '';
+        const covClass = r.coverage_pct === 100 ? 'ok' : (r.coverage_pct >= 50 ? '' : 'warn');
+        const covTag = '<span class="tag ' + covClass + '">' + r.in_stock_count + '/' + r.total_ingredients + ' in stock (' + r.coverage_pct + '%)</span>';
+        const timeParts = [];
+        if (r.servings) timeParts.push(r.servings + ' servings');
+        if (r.prep_minutes) timeParts.push('Prep ' + r.prep_minutes + 'm');
+        if (r.cook_minutes) timeParts.push('Cook ' + r.cook_minutes + 'm');
+        const ingHtml = (r.ingredients || []).map((ing) => {
+          const amtTxt = (ing.amount ? ing.amount + (ing.unit ? ' ' + ing.unit : '') + ' ' : '') + escapeHtml(ing.ingredient_name);
+          if (ing.in_stock) {
+            const stCls = ing.due_status === 'overdue' ? 'err' : (ing.due_status === 'soon' || ing.due_status === 'opened' ? 'warn' : 'ok');
+            const stLbl = ing.due_status === 'overdue' ? 'Overdue' : ing.due_status === 'soon' ? 'Due soon' : ing.due_status === 'opened' ? 'Opened' : 'In stock';
+            return '<div class="between" style="padding:4px 0;border-bottom:1px solid var(--border);font-size:13px;"><span>&#10003; ' + amtTxt + (ing.note ? ' <span class="muted">(' + escapeHtml(ing.note) + ')</span>' : '') + '</span><span class="tag ' + stCls + '">' + stLbl + ' (' + ing.stock_amount + ')</span></div>';
+          }
+          return '<div class="between" style="padding:4px 0;border-bottom:1px solid var(--border);font-size:13px;"><span class="muted">' + amtTxt + (ing.optional ? ' (optional)' : '') + '</span><button type="button" class="sm" onclick="addRecipeIngToShop(' + r.id + ',' + ing.id + ')">+ Shop</button></div>';
+        }).join('');
+        const addAllBtn = r.missing_count > 0
+          ? '<button type="button" class="sm primary" onclick="addAllMissingRecipeToShop(' + r.id + ')">+ Add ' + r.missing_count + ' Missing to Shop</button>'
+          : '';
+        return '<div class="card" style="padding:14px;">' +
+          '<div class="row" style="gap:12px;align-items:flex-start;">' + imgHtml +
+          '<div style="flex:1;min-width:0;">' +
+          '<div class="between" style="gap:8px;flex-wrap:wrap;"><h4 style="margin:0;font-size:16px;">' + escapeHtml(r.name) + '</h4><div class="row" style="gap:6px;">' + urgTag + covTag + '</div></div>' +
+          (r.description ? '<div class="muted" style="font-size:13px;margin-top:3px;">' + escapeHtml(r.description) + '</div>' : '') +
+          (timeParts.length ? '<div class="muted" style="font-size:12px;margin-top:4px;">' + timeParts.join(' · ') + (r.tags ? ' · ' + escapeHtml(r.tags) : '') + '</div>' : '') +
+          '</div></div>' +
+          (ingHtml ? '<div style="margin-top:10px;">' + ingHtml + '</div>' : '') +
+          (r.instructions ? '<details style="margin-top:10px;"><summary style="cursor:pointer;font-size:13px;font-weight:600;color:var(--primary);">Instructions</summary><div style="white-space:pre-wrap;font-size:13px;margin-top:6px;line-height:1.5;">' + escapeHtml(r.instructions) + '</div></details>' : '') +
+          '<div class="row" style="gap:8px;margin-top:12px;justify-content:flex-end;flex-wrap:wrap;">' +
+          addAllBtn +
+          '<button type="button" class="sm" onclick="openRecipeModal(' + r.id + ')">Edit</button>' +
+          '<button type="button" class="sm danger" onclick="confirmDeleteRecipe(' + r.id + ')">Delete</button>' +
+          '</div></div>';
+      }).join('');
+    }
+
+    window.addRecipeIngToShop = async (recipeId, ingId) => {
+      try {
+        const res = await api('/api/recipes/' + recipeId + '/add-missing-to-shopping', {
+          method: 'POST',
+          body: JSON.stringify({ ingredient_ids: [ingId] }),
+        });
+        const st = document.getElementById('recipesStatus');
+        st.className = 'notice';
+        st.textContent = res.added > 0 ? 'Added to shopping list: ' + res.items.join(', ') : 'Already on shopping list.';
+        await loadAll();
+      } catch (e) {
+        alert(e.message || 'Could not add to shopping list');
+      }
+    };
+
+    window.addAllMissingRecipeToShop = async (recipeId) => {
+      try {
+        const res = await api('/api/recipes/' + recipeId + '/add-missing-to-shopping', {
+          method: 'POST',
+          body: JSON.stringify({}),
+        });
+        const st = document.getElementById('recipesStatus');
+        st.className = 'notice';
+        st.textContent = res.added > 0 ? 'Added ' + res.added + ' missing item(s) to shopping list: ' + res.items.join(', ') : 'All missing ingredients are already on your shopping list.';
+        await loadAll();
+      } catch (e) {
+        alert(e.message || 'Could not add missing ingredients');
+      }
+    };
+
+    window.confirmDeleteRecipe = async (recipeId) => {
+      const rec = (state.recipes || []).find((r) => r.id === recipeId);
+      if (!confirm('Delete recipe "' + (rec ? rec.name : '#' + recipeId) + '"? This cannot be undone.')) return;
+      try {
+        await api('/api/recipes/' + recipeId, { method: 'DELETE' });
+        closeRecipeModal(false);
+        await loadAll();
+      } catch (e) {
+        alert(e.message || 'Could not delete recipe');
+      }
+    };
+
+    function renderRecipeIngRows() {
+      const box = document.getElementById('recipeIngRows');
+      if (!box) return;
+      const prodOpts = '<option value="">(Unlinked)</option>' +
+        (state.products || []).slice().sort((a, b) => a.name.localeCompare(b.name))
+          .map((p) => '<option value="' + p.id + '">' + escapeHtml(p.name) + '</option>').join('');
+      box.innerHTML = editingRecipeIngredients.map((ing, idx) =>
+        '<div class="row" style="gap:6px;align-items:center;flex-wrap:wrap;padding:6px;background:var(--bg);border-radius:8px;border:1px solid var(--border);">' +
+        '<input placeholder="Ingredient name" value="' + escapeHtml(ing.ingredient_name || '') + '" oninput="editingRecipeIngredients[' + idx + '].ingredient_name=this.value" style="flex:1.5;min-width:130px;" />' +
+        '<input type="number" step="0.25" min="0.1" placeholder="Qty" value="' + (ing.amount || 1) + '" oninput="editingRecipeIngredients[' + idx + '].amount=Number(this.value)||1" style="width:68px;" />' +
+        '<input placeholder="Unit" value="' + escapeHtml(ing.unit || '') + '" oninput="editingRecipeIngredients[' + idx + '].unit=this.value" style="width:76px;" />' +
+        '<select onchange="editingRecipeIngredients[' + idx + '].product_id=this.value?Number(this.value):null" style="flex:1.2;min-width:130px;">' + prodOpts + '</select>' +
+        '<button type="button" class="sm danger" onclick="editingRecipeIngredients.splice(' + idx + ',1);renderRecipeIngRows()">&times;</button>' +
+        '</div>'
+      ).join('');
+      const selects = box.querySelectorAll('select');
+      editingRecipeIngredients.forEach((ing, idx) => {
+        if (selects[idx]) selects[idx].value = ing.product_id ? String(ing.product_id) : '';
+      });
+    }
+
+    window.openRecipeModal = (recipeId = null, pushUrl = true) => {
+      editingRecipeId = recipeId;
+      editingRecipePhotoBase64 = null;
+      editingRecipePhotoCleared = false;
+      document.getElementById('recipeModalErr').className = 'notice err hidden';
+      document.getElementById('recPhotoFileInput').value = '';
+      const rec = recipeId ? (state.recipes || []).find((r) => r.id === recipeId) : null;
+      document.getElementById('recipeModalTitle').textContent = rec ? 'Edit Recipe' : 'Add Recipe';
+      document.getElementById('deleteRecipeModalBtn').classList.toggle('hidden', !rec);
+      document.getElementById('recNameInput').value = rec ? rec.name : '';
+      document.getElementById('recDescInput').value = rec ? (rec.description || '') : '';
+      document.getElementById('recServingsInput').value = rec ? String(rec.servings || 2) : '2';
+      document.getElementById('recPrepInput').value = rec && rec.prep_minutes != null ? String(rec.prep_minutes) : '';
+      document.getElementById('recCookInput').value = rec && rec.cook_minutes != null ? String(rec.cook_minutes) : '';
+      document.getElementById('recTagsInput').value = rec ? (rec.tags || '') : '';
+      document.getElementById('recSourceInput').value = rec ? (rec.source_url || '') : '';
+      document.getElementById('recInstrInput').value = rec ? (rec.instructions || '') : '';
+      const prevImg = document.getElementById('recPhotoPreview');
+      const clearBtn = document.getElementById('recClearPhotoBtn');
+      if (rec && rec.photo_file_name) {
+        prevImg.src = photoUrl(rec.photo_file_name, true);
+        prevImg.classList.remove('hidden');
+        clearBtn.classList.remove('hidden');
+      } else {
+        prevImg.classList.add('hidden');
+        clearBtn.classList.add('hidden');
+      }
+      editingRecipeIngredients = rec && rec.ingredients
+        ? rec.ingredients.map((i) => ({ product_id: i.product_id || null, ingredient_name: i.ingredient_name, amount: i.amount || 1, unit: i.unit || '', note: i.note || '', optional: Boolean(i.optional) }))
+        : [{ product_id: null, ingredient_name: '', amount: 1, unit: '', note: '', optional: false }];
+      renderRecipeIngRows();
+      document.getElementById('recipeModal').classList.add('open');
+      if (pushUrl && recipeId) history.pushState(null, '', '/recipes/' + recipeId);
+    };
+
+    window.closeRecipeModal = (pushUrl = true) => {
+      document.getElementById('recipeModal').classList.remove('open');
+      if (pushUrl && window.location.pathname.startsWith('/recipes/')) {
+        history.pushState(null, '', '/recipes');
+      }
+    };
+
+    document.getElementById('newRecipeBtn').onclick = () => openRecipeModal(null, false);
+    document.getElementById('addRecipeIngRowBtn').onclick = () => {
+      editingRecipeIngredients.push({ product_id: null, ingredient_name: '', amount: 1, unit: '', note: '', optional: false });
+      renderRecipeIngRows();
+    };
+    document.getElementById('recClearPhotoBtn').onclick = () => {
+      editingRecipePhotoBase64 = null;
+      editingRecipePhotoCleared = true;
+      document.getElementById('recPhotoPreview').classList.add('hidden');
+      document.getElementById('recClearPhotoBtn').classList.add('hidden');
+      document.getElementById('recPhotoFileInput').value = '';
+    };
+    document.getElementById('recPhotoFileInput').onchange = async (e) => {
+      const f = e.target.files && e.target.files[0];
+      if (!f) return;
+      const comp = await compressImageFile(f);
+      const reader = new FileReader();
+      reader.onload = () => {
+        const res = String(reader.result || '');
+        const b64 = res.includes(',') ? res.split(',')[1] : res;
+        editingRecipePhotoBase64 = b64;
+        editingRecipePhotoMime = comp.type || 'image/jpeg';
+        editingRecipePhotoCleared = false;
+        const prevImg = document.getElementById('recPhotoPreview');
+        prevImg.src = res;
+        prevImg.classList.remove('hidden');
+        document.getElementById('recClearPhotoBtn').classList.remove('hidden');
+      };
+      reader.readAsDataURL(comp.blob);
+    };
+    document.getElementById('deleteRecipeModalBtn').onclick = () => {
+      if (editingRecipeId) confirmDeleteRecipe(editingRecipeId);
+    };
+    document.getElementById('saveRecipeBtn').onclick = async () => {
+      const errEl = document.getElementById('recipeModalErr');
+      errEl.className = 'notice err hidden';
+      const name = document.getElementById('recNameInput').value.trim();
+      if (!name) { errEl.textContent = 'Recipe name is required.'; errEl.className = 'notice err'; return; }
+      const payload = {
+        name,
+        description: document.getElementById('recDescInput').value.trim(),
+        servings: Number(document.getElementById('recServingsInput').value) || 2,
+        prep_minutes: document.getElementById('recPrepInput').value ? Number(document.getElementById('recPrepInput').value) : null,
+        cook_minutes: document.getElementById('recCookInput').value ? Number(document.getElementById('recCookInput').value) : null,
+        tags: document.getElementById('recTagsInput').value.trim(),
+        source_url: document.getElementById('recSourceInput').value.trim(),
+        instructions: document.getElementById('recInstrInput').value.trim(),
+        ingredients: editingRecipeIngredients.filter((i) => (i.ingredient_name || '').trim() || i.product_id),
+      };
+      if (editingRecipePhotoBase64) {
+        payload.photo_base64 = editingRecipePhotoBase64;
+        payload.mime_type = editingRecipePhotoMime;
+      } else if (editingRecipePhotoCleared) {
+        payload.photo_file_name = null;
+      }
+      try {
+        if (editingRecipeId) {
+          await api('/api/recipes/' + editingRecipeId, { method: 'PUT', body: JSON.stringify(payload) });
+        } else {
+          await api('/api/recipes', { method: 'POST', body: JSON.stringify(payload) });
+        }
+        closeRecipeModal();
+        await loadAll();
+      } catch (e) {
+        errEl.textContent = e.message || 'Could not save recipe';
+        errEl.className = 'notice err';
+      }
+    };
+    document.getElementById('recipeSearchInput').oninput = renderRecipes;
+    document.getElementById('recipeSortSelect').onchange = async () => {
+      const sort = document.getElementById('recipeSortSelect').value || 'urgent';
+      state.recipes = await api('/api/recipes?sort=' + encodeURIComponent(sort)).catch(() => state.recipes);
+      renderRecipes();
+    };
+
+    let lastDiscoveredMeals = [];
+    async function runDiscoverRecipes() {
+      const q = document.getElementById('discoverQueryInput').value.trim();
+      const st = document.getElementById('discoverStatus');
+      const box = document.getElementById('discoverResults');
+      st.textContent = 'Searching TheMealDB...';
+      box.innerHTML = '';
+      try {
+        const res = await api('/api/recipes/discover?q=' + encodeURIComponent(q));
+        lastDiscoveredMeals = res.meals || [];
+        st.textContent = lastDiscoveredMeals.length ? 'Found ' + lastDiscoveredMeals.length + ' open-source recipes:' : 'No matches found. Try another keyword (e.g. chicken, beef, pasta, curry).';
+        box.innerHTML = lastDiscoveredMeals.map((m, idx) =>
+          '<div class="card" style="padding:12px;"><div class="row" style="gap:10px;align-items:center;">' +
+          (m.image_url ? '<img src="' + escapeHtml(m.image_url) + '" style="width:64px;height:64px;object-fit:cover;border-radius:8px;flex-shrink:0;" />' : '') +
+          '<div style="flex:1;min-width:0;"><div style="font-weight:700;">' + escapeHtml(m.name) + '</div>' +
+          '<div class="muted" style="font-size:12px;">' + escapeHtml(m.description || '') + ' · ' + m.ingredients.length + ' ingredients</div></div>' +
+          '<button type="button" class="sm primary" onclick="importDiscoveredMeal(' + idx + ')">Import</button>' +
+          '</div></div>'
+        ).join('');
+      } catch (e) {
+        st.textContent = e.message || 'Could not search TheMealDB';
+      }
+    }
+    window.importDiscoveredMeal = async (idx) => {
+      const m = lastDiscoveredMeals[idx];
+      if (!m) return;
+      try {
+        await api('/api/recipes', {
+          method: 'POST',
+          body: JSON.stringify({
+            name: m.name,
+            description: m.description,
+            instructions: m.instructions,
+            tags: m.tags,
+            source_url: m.source_url,
+            photo_url: m.image_url,
+            ingredients: m.ingredients,
+          }),
+        });
+        document.getElementById('discoverRecipesModal').classList.remove('open');
+        await loadAll();
+      } catch (e) {
+        alert(e.message || 'Could not import recipe');
+      }
+    };
+    document.getElementById('openDiscoverRecipesBtn').onclick = () => {
+      document.getElementById('discoverRecipesModal').classList.add('open');
+      if (lastDiscoveredMeals.length === 0) runDiscoverRecipes();
+    };
+    document.getElementById('discoverSearchBtn').onclick = runDiscoverRecipes;
+    document.getElementById('discoverQueryInput').onkeydown = (e) => {
+      if (e.key === 'Enter') runDiscoverRecipes();
+    };
+
     function applyRouteFromUrl() {
       const p = window.location.pathname.replace(/\\/+$/, '') || '/';
       const itemMatch = p.match(/^\\/(?:item|inventory)\\/(\\d+)$/);
@@ -2959,9 +3381,16 @@ export function renderWebUiHtml(): string {
         openReceiptModal(Number(receiptMatch[1]), false);
         return;
       }
+      const recipeMatch = p.match(/^\\/recipes\\/(\\d+)$/);
+      if (recipeMatch) {
+        switchTab('recipes', false);
+        openRecipeModal(Number(recipeMatch[1]), false);
+        return;
+      }
       closeEditModal(false);
       closeReceiptModal(false);
-      const tabMatch = p.match(/^\\/(inventory|stats|receipts|shopping|labels|locations|activity|users|import|keys)$/);
+      closeRecipeModal(false);
+      const tabMatch = p.match(/^\\/(inventory|recipes|stats|receipts|shopping|labels|locations|activity|users|import|keys)$/);
       if (tabMatch) {
         switchTab(tabMatch[1], false);
       } else {
