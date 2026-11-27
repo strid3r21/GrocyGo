@@ -55,65 +55,88 @@ export function buildTsplLabels(opts: TsplLabelOptions): string {
 
   const out: string[] = [];
   if (orient === '2x1') {
-    out.push('SIZE 50 mm,25 mm');
+    out.push('SIZE 50.8 mm,25.4 mm');
   } else {
-    out.push('SIZE 25 mm,50 mm');
+    out.push('SIZE 25.4 mm,50.8 mm');
   }
   out.push('GAP 3 mm,0');
   out.push('DIRECTION 1');
   out.push('DENSITY 12');
 
+  const pushBoldText = (x: number, y: number, font: string, text: string) => {
+    out.push(`TEXT ${x},${y},"${font}",0,1,1,"${text}"`);
+    out.push(`TEXT ${x + 1},${y},"${font}",0,1,1,"${text}"`);
+  };
+
   for (const code of cleanCodes) {
     out.push('CLS');
+    const cleanTitle = title && title.toLowerCase() !== code.toLowerCase() ? title : '';
     if (orient === '2x1') {
       if (format === 'qr') {
-        // Left QR code, right title + subtitle + code
-        out.push(`QRCODE 16,24,M,4,A,0,"${code}"`);
-        const titleLines = wrapLines(title || code, 17, 2);
-        let y = 28;
+        // Large full-height QR on left (~168x168 dots on 406x203 label)
+        const qrCell = code.length <= 16 ? 8 : code.length <= 34 ? 6 : 5;
+        const qrY = qrCell === 8 ? 18 : 26;
+        out.push(`QRCODE 16,${qrY},M,${qrCell},A,0,"${code}"`);
+
+        // Vertically centered text stack on the right (x=198..398)
+        const titleLines = cleanTitle ? wrapLines(cleanTitle, 12, 2) : [];
+        const rows: Array<{ font: string; bold: boolean; text: string; h: number }> = [];
         for (const tl of titleLines) {
-          out.push(`TEXT 172,${y},"3",0,1,1,"${tl}"`);
-          y += 30;
+          rows.push({ font: '3', bold: true, text: tl, h: 28 });
         }
         if (subtitle) {
-          out.push(`TEXT 172,${y + 4},"2",0,1,1,"${subtitle.slice(0, 21)}"`);
-          y += 26;
+          rows.push({ font: '2', bold: false, text: subtitle.slice(0, 16), h: 25 });
         }
-        out.push(`TEXT 172,158,"2",0,1,1,"${code.slice(0, 20)}"`);
+        rows.push({
+          font: code.length <= 12 ? '3' : '2',
+          bold: true,
+          text: code.slice(0, 16),
+          h: code.length <= 12 ? 26 : 22,
+        });
+
+        const totalH = rows.reduce((sum, r) => sum + r.h, 0);
+        let y = Math.max(18, Math.round((203 - totalH) / 2));
+        for (const r of rows) {
+          if (r.bold) pushBoldText(198, y, r.font, r.text);
+          else out.push(`TEXT 198,${y},"${r.font}",0,1,1,"${r.text}"`);
+          y += r.h;
+        }
       } else {
-        // Landscape Code 128 barcode + title on top
-        if (title) {
-          out.push(`TEXT 18,14,"3",0,1,1,"${title.slice(0, 26)}"`);
+        // Landscape Code 128 barcode + bold title on top
+        if (cleanTitle) {
+          pushBoldText(18, 14, '3', cleanTitle.slice(0, 23));
         }
-        out.push(`BARCODE 22,52,"128",86,1,0,2,2,"${code}"`);
+        out.push(`BARCODE 22,50,"128",92,1,0,2,2,"${code}"`);
         if (subtitle) {
-          out.push(`TEXT 18,172,"1",0,1,1,"${subtitle.slice(0, 34)}"`);
+          out.push(`TEXT 18,174,"2",0,1,1,"${subtitle.slice(0, 30)}"`);
         }
       }
     } else {
       // Portrait 1"x2" (203x406 dots)
       if (format === 'qr') {
-        out.push(`QRCODE 28,22,M,5,A,0,"${code}"`);
-        const titleLines = wrapLines(title || code, 14, 3);
-        let y = 196;
+        const qrCell = code.length <= 16 ? 7 : code.length <= 34 ? 6 : 5;
+        out.push(`QRCODE 26,20,M,${qrCell},A,0,"${code}"`);
+        const titleLines = cleanTitle ? wrapLines(cleanTitle, 11, 3) : [];
+        let y = 192;
         for (const tl of titleLines) {
-          out.push(`TEXT 14,${y},"3",0,1,1,"${tl}"`);
+          pushBoldText(14, y, '3', tl);
           y += 30;
         }
         if (subtitle) {
-          out.push(`TEXT 14,${y + 6},"2",0,1,1,"${subtitle.slice(0, 16)}"`);
+          out.push(`TEXT 14,${y + 4},"2",0,1,1,"${subtitle.slice(0, 15)}"`);
+          y += 28;
         }
-        out.push(`TEXT 14,364,"2",0,1,1,"${code.slice(0, 16)}"`);
+        pushBoldText(14, y + 6, code.length <= 11 ? '3' : '2', code.slice(0, 15));
       } else {
-        const titleLines = wrapLines(title || code, 14, 2);
+        const titleLines = cleanTitle ? wrapLines(cleanTitle, 11, 2) : [];
         let y = 18;
         for (const tl of titleLines) {
-          out.push(`TEXT 14,${y},"3",0,1,1,"${tl}"`);
+          pushBoldText(14, y, '3', tl);
           y += 30;
         }
-        out.push(`BARCODE 16,110,"128",110,1,0,2,2,"${code}"`);
+        out.push(`BARCODE 16,108,"128",114,1,0,2,2,"${code}"`);
         if (subtitle) {
-          out.push(`TEXT 14,270,"2",0,1,1,"${subtitle.slice(0, 16)}"`);
+          out.push(`TEXT 14,274,"2",0,1,1,"${subtitle.slice(0, 15)}"`);
         }
       }
     }
