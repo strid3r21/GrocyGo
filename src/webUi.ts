@@ -228,6 +228,7 @@ export function renderWebUiHtml(): string {
       margin: 12px 0;
     }
     .label-card-2x1 {
+      position: relative;
       width: 300px;
       height: 150px;
       background: #ffffff;
@@ -242,6 +243,7 @@ export function renderWebUiHtml(): string {
       overflow: hidden;
     }
     .label-card-1x2 {
+      position: relative;
       width: 150px;
       height: 300px;
       background: #ffffff;
@@ -255,6 +257,15 @@ export function renderWebUiHtml(): string {
       align-items: center;
       justify-content: center;
       overflow: hidden;
+    }
+    .label-brand-corner {
+      position: absolute;
+      top: 5px;
+      right: 8px;
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      color: #444;
     }
     .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 14px; }
     .kpi-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px; }
@@ -2571,6 +2582,7 @@ export function renderWebUiHtml(): string {
       if (format === 'qr') {
         if (orient === '1x2') {
           card.innerHTML = \`
+            <div class="label-brand-corner">GrocyGo</div>
             <img src="\${imgUrl}" alt="QR" style="width:124px;height:124px;display:block;flex-shrink:0;" />
             <div style="text-align:center;margin-top:6px;width:100%;overflow:hidden;">
               \${title ? \`<div style="font-size:13px;font-weight:700;line-height:1.2;word-break:break-word;">\${escapeHtml(title)}</div>\` : ''}
@@ -2579,6 +2591,7 @@ export function renderWebUiHtml(): string {
             </div>\`;
         } else {
           card.innerHTML = \`
+            <div class="label-brand-corner">GrocyGo</div>
             <div style="display:flex;align-items:center;gap:10px;width:100%;height:100%;">
               <img src="\${imgUrl}" alt="QR" style="width:126px;height:126px;display:block;flex-shrink:0;" />
               <div style="flex:1;min-width:0;text-align:left;">
@@ -2590,6 +2603,7 @@ export function renderWebUiHtml(): string {
         }
       } else {
         card.innerHTML = \`
+          <div class="label-brand-corner">GrocyGo</div>
           <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;width:100%;height:100%;gap:2px;">
             \${title ? \`<div style="font-size:13px;font-weight:700;line-height:1.15;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">\${escapeHtml(title)}</div>\` : ''}
             <img src="\${imgUrl}" alt="Barcode" style="width:100%;max-height:\${orient === '1x2' ? '120px' : '96px'};object-fit:contain;display:block;" />
@@ -2688,9 +2702,9 @@ export function renderWebUiHtml(): string {
       for (const entry of svgs) {
         const oneHtml = format === 'qr'
           ? (orient === '1x2'
-            ? \`<div class="lbl portrait"><div class="qr-box">\${entry.svg}</div><div class="meta">\${title ? '<div class="t">' + escapeHtml(title) + '</div>' : ''}\${sub ? '<div class="s">' + escapeHtml(sub) + '</div>' : ''}<div class="c">\${escapeHtml(entry.code)}</div></div></div>\`
-            : \`<div class="lbl landscape"><div class="qr-box">\${entry.svg}</div><div class="meta"><div class="t">\${escapeHtml(title || 'GrocyGo')}</div>\${sub ? '<div class="s">' + escapeHtml(sub) + '</div>' : ''}<div class="c">\${escapeHtml(entry.code)}</div></div></div>\`)
-          : \`<div class="lbl bar">\${title ? '<div class="t">' + escapeHtml(title) + '</div>' : ''}<div class="bar-box">\${entry.svg}</div>\${sub ? '<div class="s">' + escapeHtml(sub) + '</div>' : ''}</div>\`;
+            ? \`<div class="lbl portrait"><div class="brand">GrocyGo</div><div class="qr-box">\${entry.svg}</div><div class="meta">\${title ? '<div class="t">' + escapeHtml(title) + '</div>' : ''}\${sub ? '<div class="s">' + escapeHtml(sub) + '</div>' : ''}<div class="c">\${escapeHtml(entry.code)}</div></div></div>\`
+            : \`<div class="lbl landscape"><div class="brand">GrocyGo</div><div class="qr-box">\${entry.svg}</div><div class="meta"><div class="t">\${escapeHtml(title || 'GrocyGo')}</div>\${sub ? '<div class="s">' + escapeHtml(sub) + '</div>' : ''}<div class="c">\${escapeHtml(entry.code)}</div></div></div>\`)
+          : \`<div class="lbl bar"><div class="brand">GrocyGo</div>\${title ? '<div class="t">' + escapeHtml(title) + '</div>' : ''}<div class="bar-box">\${entry.svg}</div>\${sub ? '<div class="s">' + escapeHtml(sub) + '</div>' : ''}</div>\`;
         for (let k = 0; k < copies; k++) pagesArr.push('<div class="pg">' + oneHtml + '</div>');
       }
 
@@ -2702,8 +2716,9 @@ export function renderWebUiHtml(): string {
         html, body { margin: 0; padding: 0; background: #fff; color: #000; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
         .pg { width: 1in; height: 2in; overflow: hidden; position: relative; page-break-after: always; break-after: page; }
         .pg:last-child { page-break-after: auto; break-after: auto; }
-        .lbl { width: \${pageW}; height: \${pageH}; padding: 0.06in 0.08in; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+        .lbl { position: relative; width: \${pageW}; height: \${pageH}; padding: 0.06in 0.08in; overflow: hidden; display: flex; align-items: center; justify-content: center; }
         \${rotate ? '.lbl { position: absolute; top: 0; left: 0; transform-origin: 0 0; transform: translate(1in, 0) rotate(90deg); }' : ''}
+        .brand { position: absolute; top: 0.04in; right: 0.07in; font-size: 5.5pt; font-weight: 700; letter-spacing: 0.02em; color: #333; }
         .lbl.landscape { flex-direction: row; gap: 0.08in; }
         .lbl.landscape .qr-box { width: 0.84in; height: 0.84in; flex-shrink: 0; }
         .lbl.landscape .meta { flex: 1; min-width: 0; text-align: left; }

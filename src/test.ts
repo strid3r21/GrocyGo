@@ -1145,11 +1145,12 @@ async function runTests() {
     assert.ok(dryPrint.tspl.includes('SIZE 50.8 mm,25.4 mm'));
     assert.ok(dryPrint.tspl.includes('GAP 3 mm,0'));
     assert.ok(dryPrint.tspl.includes('DENSITY 12'));
+    assert.ok(dryPrint.tspl.includes('TEXT 336,10,"1",0,1,1,"GrocyGo"'));
     assert.ok(dryPrint.tspl.includes('QRCODE 16,18,M,8,A,0,"GG-TEST01"'));
     assert.ok(dryPrint.tspl.includes('GG-TEST01'));
     assert.ok(dryPrint.tspl.includes('PRINT 2,1'));
 
-    console.log('ALL SERVER v2.3.2 TESTS PASSED!');
+    console.log('ALL SERVER v2.3.3 TESTS PASSED!');
     console.log('\nSample compact MCP inventory_summary output:\n' + summaryText);
     console.log('\nSample compact MCP search_inventory output:\n' + searchText);
   } finally {

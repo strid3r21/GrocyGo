@@ -72,13 +72,15 @@ export function buildTsplLabels(opts: TsplLabelOptions): string {
     out.push('CLS');
     const cleanTitle = title && title.toLowerCase() !== code.toLowerCase() ? title : '';
     if (orient === '2x1') {
+      // Subtle GrocyGo brand tag in top-right corner
+      out.push('TEXT 336,10,"1",0,1,1,"GrocyGo"');
       if (format === 'qr') {
         // Large full-height QR on left (~168x168 dots on 406x203 label)
         const qrCell = code.length <= 16 ? 8 : code.length <= 34 ? 6 : 5;
         const qrY = qrCell === 8 ? 18 : 26;
         out.push(`QRCODE 16,${qrY},M,${qrCell},A,0,"${code}"`);
 
-        // Vertically centered text stack on the right (x=198..398)
+        // Vertically centered text stack on the right (x=198..398), below top-right brand tag
         const titleLines = cleanTitle ? wrapLines(cleanTitle, 12, 2) : [];
         const rows: Array<{ font: string; bold: boolean; text: string; h: number }> = [];
         for (const tl of titleLines) {
@@ -95,7 +97,7 @@ export function buildTsplLabels(opts: TsplLabelOptions): string {
         });
 
         const totalH = rows.reduce((sum, r) => sum + r.h, 0);
-        let y = Math.max(18, Math.round((203 - totalH) / 2));
+        let y = Math.max(30, Math.round((203 - totalH) / 2));
         for (const r of rows) {
           if (r.bold) pushBoldText(198, y, r.font, r.text);
           else out.push(`TEXT 198,${y},"${r.font}",0,1,1,"${r.text}"`);
@@ -104,7 +106,7 @@ export function buildTsplLabels(opts: TsplLabelOptions): string {
       } else {
         // Landscape Code 128 barcode + bold title on top
         if (cleanTitle) {
-          pushBoldText(18, 14, '3', cleanTitle.slice(0, 23));
+          pushBoldText(18, 14, '3', cleanTitle.slice(0, 19));
         }
         out.push(`BARCODE 22,50,"128",92,1,0,2,2,"${code}"`);
         if (subtitle) {
@@ -113,9 +115,10 @@ export function buildTsplLabels(opts: TsplLabelOptions): string {
       }
     } else {
       // Portrait 1"x2" (203x406 dots)
+      out.push('TEXT 136,6,"1",0,1,1,"GrocyGo"');
       if (format === 'qr') {
         const qrCell = code.length <= 16 ? 7 : code.length <= 34 ? 6 : 5;
-        out.push(`QRCODE 26,20,M,${qrCell},A,0,"${code}"`);
+        out.push(`QRCODE 26,24,M,${qrCell},A,0,"${code}"`);
         const titleLines = cleanTitle ? wrapLines(cleanTitle, 11, 3) : [];
         let y = 192;
         for (const tl of titleLines) {
