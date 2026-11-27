@@ -1954,6 +1954,41 @@ export class InventoryService {
     return this.getAlertSettings();
   }
 
+  getPrinterSettings(): {
+    bridge_url: string;
+    bridge_token: string;
+    configured: boolean;
+  } {
+    const rows = this.db
+      .prepare(
+        "SELECT key, value FROM server_settings WHERE key IN ('printer_bridge_url', 'printer_bridge_token')"
+      )
+      .all() as Array<{ key: string; value: string }>;
+    const map = new Map(rows.map((r) => [r.key, r.value]));
+    const bridgeUrl = (map.get('printer_bridge_url') ?? process.env.PRINT_BRIDGE_URL ?? '').trim().replace(/\/+$/, '');
+    const bridgeToken = (map.get('printer_bridge_token') ?? process.env.PRINT_BRIDGE_TOKEN ?? '').trim();
+    return {
+      bridge_url: bridgeUrl,
+      bridge_token: bridgeToken,
+      configured: Boolean(bridgeUrl),
+    };
+  }
+
+  updatePrinterSettings(payload: { bridge_url?: string; bridge_token?: string }) {
+    const upsert = this.db.prepare(
+      `INSERT INTO server_settings (key, value, updated_at)
+       VALUES (?, ?, datetime('now'))
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`
+    );
+    if (payload.bridge_url !== undefined) {
+      upsert.run('printer_bridge_url', String(payload.bridge_url || '').trim().replace(/\/+$/, ''));
+    }
+    if (payload.bridge_token !== undefined) {
+      upsert.run('printer_bridge_token', String(payload.bridge_token || '').trim());
+    }
+    return this.getPrinterSettings();
+  }
+
   getInventoryStats(days = 30) {
     const safeDays = Math.max(1, Math.min(365, Math.round(Number(days) || 30)));
     const alertCfg = this.getAlertSettings();

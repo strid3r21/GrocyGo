@@ -24,6 +24,7 @@ import {
   savePhotoBuffer,
 } from './photos';
 import { ocrReceiptImage, parseReceiptText } from './receiptOcr';
+import { buildTsplLabels } from './tspl';
 import { renderWebUiHtml } from './webUi';
 
 const ALLOWED_TABLES = new Set([
@@ -214,7 +215,7 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
       }
 
       if (method === 'GET' && pathname === '/api/health') {
-        sendJson(res, 200, { ok: true, service: 'grocygo-server', version: '2.2.2' });
+        sendJson(res, 200, { ok: true, service: 'grocygo-server', version: '2.3.0' });
         return;
       }
 
@@ -343,6 +344,98 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
         const days = body.due_soon_days ? Number(body.due_soon_days) : undefined;
         const force = Boolean(body.force);
         sendJson(res, 200, service.runDailyExpiringSoonCheck(days, force));
+        return;
+      }
+
+      // ─── Label Printer Bridge Settings & SP310 TSPL Print ─────
+      if (pathname === '/api/settings/printer') {
+        if (method === 'GET') {
+          const cfg = service.getPrinterSettings();
+          sendJson(res, 200, {
+            bridge_url: cfg.bridge_url,
+            has_token: Boolean(cfg.bridge_token),
+            configured: cfg.configured,
+          });
+          return;
+        }
+        if (method === 'PUT') {
+          if (currentUser.role !== 'admin') {
+            sendError(res, 403, 'Admin permission required to update printer settings');
+            return;
+          }
+          const body = await readJsonBody(req);
+          const updated = service.updatePrinterSettings({
+            bridge_url: body.bridge_url !== undefined ? String(body.bridge_url) : undefined,
+            bridge_token: body.bridge_token !== undefined ? String(body.bridge_token) : undefined,
+          });
+          sendJson(res, 200, {
+            bridge_url: updated.bridge_url,
+            has_token: Boolean(updated.bridge_token),
+            configured: updated.configured,
+          });
+          return;
+        }
+      }
+
+      if (method === 'POST' && pathname === '/api/labels/print') {
+        const body = await readJsonBody(req);
+        const codes: string[] = Array.isArray(body.codes)
+          ? body.codes.map((c: any) => String(c || '').trim()).filter(Boolean)
+          : body.code
+          ? [String(body.code).trim()]
+          : [];
+        if (codes.length === 0) {
+          sendError(res, 400, 'Provide at least one label code to print');
+          return;
+        }
+        const copies = Math.max(1, Math.min(20, Math.round(Number(body.copies) || 1)));
+        const tspl = buildTsplLabels({
+          codes,
+          title: body.title ? String(body.title) : '',
+          subtitle: body.subtitle ? String(body.subtitle) : '',
+          format: body.format === 'barcode' ? 'barcode' : 'qr',
+          orient: body.orient === '1x2' ? '1x2' : '2x1',
+          copies,
+        });
+
+        if (body.dry_run) {
+          sendJson(res, 200, { printed: false, dry_run: true, labels: codes.length * copies, tspl });
+          return;
+        }
+
+        const cfg = service.getPrinterSettings();
+        if (!cfg.bridge_url) {
+          sendError(
+            res,
+            400,
+            'Label printer bridge is not configured yet. Set Print Bridge URL under API & MCP on the server.'
+          );
+          return;
+        }
+
+        const bridgeRes = await fetch(`${cfg.bridge_url}/print`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(cfg.bridge_token ? { 'X-PRINT-TOKEN': cfg.bridge_token } : {}),
+          },
+          body: JSON.stringify({ tspl }),
+        });
+        const bridgeJson = (await bridgeRes.json().catch(() => ({}))) as any;
+        if (!bridgeRes.ok) {
+          sendError(
+            res,
+            502,
+            bridgeJson.error_message || `Print bridge returned HTTP ${bridgeRes.status}`
+          );
+          return;
+        }
+
+        sendJson(res, 200, {
+          printed: true,
+          labels: codes.length * copies,
+          codes,
+        });
         return;
       }
 

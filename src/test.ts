@@ -1116,7 +1116,37 @@ async function runTests() {
       }
     }
 
-    console.log('ALL SERVER v2.2.2 TESTS PASSED!');
+    // 30. SP310 TSPL label generation & printer bridge settings
+    const printerDefaults = await fetch(`${base}/api/settings/printer`, { headers }).then((r) => r.json());
+    assert.equal(printerDefaults.configured, false);
+
+    const printerUpdated = await fetch(`${base}/api/settings/printer`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ bridge_url: 'http://192.168.1.50:9105', bridge_token: 'secret-tok' }),
+    }).then((r) => r.json());
+    assert.equal(printerUpdated.configured, true);
+    assert.equal(printerUpdated.has_token, true);
+
+    const dryPrint = await fetch(`${base}/api/labels/print`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        code: 'GG-TEST01',
+        title: 'Homemade Soup',
+        subtitle: '2026-11-26',
+        format: 'qr',
+        orient: '2x1',
+        copies: 2,
+        dry_run: true,
+      }),
+    }).then((r) => r.json());
+    assert.equal(dryPrint.labels, 2);
+    assert.ok(dryPrint.tspl.includes('QRCODE'));
+    assert.ok(dryPrint.tspl.includes('GG-TEST01'));
+    assert.ok(dryPrint.tspl.includes('PRINT 2,1'));
+
+    console.log('ALL SERVER v2.3.0 TESTS PASSED!');
     console.log('\nSample compact MCP inventory_summary output:\n' + summaryText);
     console.log('\nSample compact MCP search_inventory output:\n' + searchText);
   } finally {

@@ -518,7 +518,11 @@ export function renderWebUiHtml(): string {
               <div id="labelBatchList" class="row hidden" style="justify-content:center;gap:6px;max-height:84px;overflow-y:auto;"></div>
             </div>
 
-            <button id="printLabelBtn" class="primary" style="width:100%;" type="button">Print 1&Prime; &times; 2&Prime; Label</button>
+            <div class="row" style="gap:8px;">
+              <button id="printLabelBtn" class="primary" style="flex:1;" type="button">Browser Print</button>
+              <button id="printSp310Btn" class="primary" style="flex:1;" type="button">Print on SP310</button>
+            </div>
+            <div id="sp310PrintStatus" class="hidden"></div>
           </div>
 
           <div class="card">
@@ -716,6 +720,29 @@ export function renderWebUiHtml(): string {
 
         <div class="card">
           <div class="between" style="margin-bottom:8px;">
+            <h3 style="margin:0;">SP310 Thermal Label Printer Bridge</h3>
+            <span id="printerStatusBadge" class="tag"></span>
+          </div>
+          <p class="muted" style="margin-top:0;margin-bottom:12px;">Connect your USB SP310 printer via <code>node print-bridge.js</code> so both this web UI and the mobile app can print 2&Prime;&times;1&Prime; labels directly.</p>
+          <div class="row" style="gap:10px;margin-bottom:10px;">
+            <div class="field" style="flex:1.4;margin-bottom:0;">
+              <label for="printerUrlInput">Print Bridge URL</label>
+              <input id="printerUrlInput" placeholder="http://192.168.1.50:9105" />
+            </div>
+            <div class="field" style="flex:1;margin-bottom:0;">
+              <label for="printerTokenInput">Print Bridge Token</label>
+              <input id="printerTokenInput" type="password" placeholder="Secret token from print-bridge.js" />
+            </div>
+          </div>
+          <div class="row" style="gap:8px;">
+            <button id="savePrinterBtn" class="primary sm" type="button">Save Printer Settings</button>
+            <button id="testPrinterBtn" class="sm" type="button">Test Print Label</button>
+          </div>
+          <div id="printerSaveStatus" class="hidden"></div>
+        </div>
+
+        <div class="card">
+          <div class="between" style="margin-bottom:8px;">
             <h3 style="margin:0;">MCP Server &amp; Permissions</h3>
             <div id="mcpBadges" class="row" style="gap:6px;"></div>
           </div>
@@ -896,7 +923,7 @@ export function renderWebUiHtml(): string {
   <script>
     let apiKey = localStorage.getItem('grocygo_key') || '';
     let currentUser = null;
-    let state = { stock: [], products: [], barcodes: [], groups: [], locations: [], units: [], shopping: [], keys: [], activity: [], users: [], backups: [], receipts: [], mcpSettings: { read_enabled: true, write_enabled: false }, alertSettings: { expiring_soon_enabled: true, expiring_soon_days: 5, expiring_soon_hour: 9, auto_add_below_min_stock: false, last_expiring_soon_notif_date: null }, stats: null };
+    let state = { stock: [], products: [], barcodes: [], groups: [], locations: [], units: [], shopping: [], keys: [], activity: [], users: [], backups: [], receipts: [], mcpSettings: { read_enabled: true, write_enabled: false }, alertSettings: { expiring_soon_enabled: true, expiring_soon_days: 5, expiring_soon_hour: 9, auto_add_below_min_stock: false, last_expiring_soon_notif_date: null }, printerSettings: { bridge_url: '', has_token: false, configured: false }, stats: null };
     let statsDays = 30;
     let editingReceiptId = null;
     let editingReceiptPhoto = null;
@@ -975,7 +1002,7 @@ export function renderWebUiHtml(): string {
     };
 
     async function loadAll() {
-      const [me, stock, products, barcodes, groups, locations, units, shopping, keys, activity, users, backups, receipts, mcpSettings, alertSettings, stats] = await Promise.all([
+      const [me, stock, products, barcodes, groups, locations, units, shopping, keys, activity, users, backups, receipts, mcpSettings, alertSettings, printerSettings, stats] = await Promise.all([
         api('/api/auth/me'),
         api('/api/stock'),
         api('/api/objects/products'),
@@ -991,10 +1018,11 @@ export function renderWebUiHtml(): string {
         api('/api/receipts?limit=100').catch(() => []),
         api('/api/mcp/settings').catch(() => ({ read_enabled: true, write_enabled: false })),
         api('/api/settings/alerts').catch(() => ({ expiring_soon_enabled: true, expiring_soon_days: 5, expiring_soon_hour: 9, auto_add_below_min_stock: false, last_expiring_soon_notif_date: null })),
+        api('/api/settings/printer').catch(() => ({ bridge_url: '', has_token: false, configured: false })),
         api('/api/stats?days=' + statsDays).catch(() => null),
       ]);
       currentUser = me;
-      state = { stock, products, barcodes, groups, locations, units, shopping, keys, activity, users, backups, receipts, mcpSettings, alertSettings, stats };
+      state = { stock, products, barcodes, groups, locations, units, shopping, keys, activity, users, backups, receipts, mcpSettings, alertSettings, printerSettings, stats };
       const validIds = new Set(products.map((p) => p.id));
       for (const id of [...selectedIds]) {
         if (!validIds.has(id)) selectedIds.delete(id);
@@ -1331,6 +1359,16 @@ export function renderWebUiHtml(): string {
           : 'Not sent yet';
       }
 
+      const pCfg = state.printerSettings || { bridge_url: '', has_token: false, configured: false };
+      const pUrlEl = document.getElementById('printerUrlInput');
+      if (pUrlEl) {
+        if (!pUrlEl.matches(':focus')) pUrlEl.value = pCfg.bridge_url || '';
+        pUrlEl.disabled = !isAdmin;
+        document.getElementById('printerTokenInput').disabled = !isAdmin;
+        document.getElementById('savePrinterBtn').disabled = !isAdmin;
+        document.getElementById('printerStatusBadge').textContent = pCfg.configured ? 'Connected: ' + pCfg.bridge_url : 'Not configured';
+      }
+
       renderStats();
       renderReceipts();
 
@@ -1550,6 +1588,10 @@ export function renderWebUiHtml(): string {
       const wrap = document.getElementById('editBarcodesList');
       if (!wrap) return;
       const list = state.barcodes.filter((b) => Number(b.product_id) === Number(productId));
+      const lblBtn = document.getElementById('editPrintLabelBtn');
+      if (lblBtn) {
+        lblBtn.textContent = list.length > 0 ? 'Reprint Label' : 'Generate & Attach Label';
+      }
       if (list.length === 0) {
         wrap.innerHTML = '<div class="muted" style="font-size:12px;">No barcodes linked yet.</div>';
         return;
@@ -1759,10 +1801,30 @@ export function renderWebUiHtml(): string {
     document.getElementById('statsWindowSelect').onchange = async (e) => {
       statsDays = Number(e.target.value) || 30;
       state.stats = await api('/api/stats?days=' + statsDays).catch(() => null);
+      const pCfg = state.printerSettings || { bridge_url: '', has_token: false, configured: false };
+      const pUrlEl = document.getElementById('printerUrlInput');
+      if (pUrlEl) {
+        if (!pUrlEl.matches(':focus')) pUrlEl.value = pCfg.bridge_url || '';
+        pUrlEl.disabled = !isAdmin;
+        document.getElementById('printerTokenInput').disabled = !isAdmin;
+        document.getElementById('savePrinterBtn').disabled = !isAdmin;
+        document.getElementById('printerStatusBadge').textContent = pCfg.configured ? 'Connected: ' + pCfg.bridge_url : 'Not configured';
+      }
+
       renderStats();
     };
     document.getElementById('refreshStatsBtn').onclick = async () => {
       state.stats = await api('/api/stats?days=' + statsDays).catch(() => null);
+      const pCfg = state.printerSettings || { bridge_url: '', has_token: false, configured: false };
+      const pUrlEl = document.getElementById('printerUrlInput');
+      if (pUrlEl) {
+        if (!pUrlEl.matches(':focus')) pUrlEl.value = pCfg.bridge_url || '';
+        pUrlEl.disabled = !isAdmin;
+        document.getElementById('printerTokenInput').disabled = !isAdmin;
+        document.getElementById('savePrinterBtn').disabled = !isAdmin;
+        document.getElementById('printerStatusBadge').textContent = pCfg.configured ? 'Connected: ' + pCfg.bridge_url : 'Not configured';
+      }
+
       renderStats();
     };
 
@@ -2750,6 +2812,104 @@ export function renderWebUiHtml(): string {
     document.getElementById('mcpReadToggle').onchange = saveMcpSettings;
     document.getElementById('mcpWriteToggle').onchange = saveMcpSettings;
     document.getElementById('mcpDeleteToggle').onchange = saveMcpSettings;
+
+    document.getElementById('savePrinterBtn').onclick = async () => {
+      const stEl = document.getElementById('printerSaveStatus');
+      stEl.className = 'hidden';
+      try {
+        const tok = document.getElementById('printerTokenInput').value.trim();
+        const body = { bridge_url: document.getElementById('printerUrlInput').value.trim() };
+        if (tok) body.bridge_token = tok;
+        state.printerSettings = await api('/api/settings/printer', { method: 'PUT', body: JSON.stringify(body) });
+        document.getElementById('printerTokenInput').value = '';
+        stEl.className = 'notice';
+        stEl.textContent = 'SP310 print bridge settings saved.';
+        renderAll();
+      } catch (e) {
+        stEl.className = 'notice err';
+        stEl.textContent = e.message || 'Could not save printer settings';
+      }
+    };
+    document.getElementById('testPrinterBtn').onclick = async () => {
+      const stEl = document.getElementById('printerSaveStatus');
+      stEl.className = 'hidden';
+      try {
+        await api('/api/labels/print', {
+          method: 'POST',
+          body: JSON.stringify({ code: 'GG-TEST01', title: 'GrocyGo SP310 Test', subtitle: new Date().toISOString().slice(0, 10), format: 'qr', orient: '2x1', copies: 1 }),
+        });
+        stEl.className = 'notice';
+        stEl.textContent = 'Sent test label to SP310!';
+      } catch (e) {
+        stEl.className = 'notice err';
+        stEl.textContent = e.message || 'Test print failed';
+      }
+    };
+    document.getElementById('printSp310Btn').onclick = async () => {
+      const stEl = document.getElementById('sp310PrintStatus');
+      stEl.className = 'hidden';
+      try {
+        const copies = Math.max(1, Math.min(20, Number(document.getElementById('labelCopiesInput').value || 1)));
+        const codes = labelBatchCodes.length ? labelBatchCodes : [(document.getElementById('labelCodeInput').value || '').trim()].filter(Boolean);
+        const res = await api('/api/labels/print', {
+          method: 'POST',
+          body: JSON.stringify({
+            codes,
+            title: (document.getElementById('labelTitleInput').value || '').trim(),
+            subtitle: (document.getElementById('labelSubInput').value || '').trim(),
+            format: document.getElementById('labelFormatSelect').value,
+            orient: document.getElementById('labelOrientSelect').value,
+            copies,
+          }),
+        });
+        stEl.className = 'notice';
+        stEl.textContent = 'Printed ' + res.labels + ' label(s) on SP310!';
+      } catch (e) {
+        stEl.className = 'notice err';
+        stEl.textContent = e.message || 'Could not print on SP310';
+      }
+    };
+    document.getElementById('editPrintLabelBtn').onclick = async () => {
+      if (!editingProductId) return;
+      const p = state.products.find((x) => x.id === editingProductId);
+      if (!p) return;
+      const existing = state.barcodes.find((b) => Number(b.product_id) === Number(p.id));
+      let code = existing ? existing.barcode : '';
+      if (!code) {
+        const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+        let rand = '';
+        for (let i = 0; i < 6; i++) rand += chars[Math.floor(Math.random() * chars.length)];
+        code = 'GG-' + rand;
+        try {
+          await api('/api/objects/product_barcodes', {
+            method: 'POST',
+            body: JSON.stringify({ product_id: p.id, barcode: code }),
+          });
+          await loadAll();
+          renderEditModalBarcodes(p.id);
+        } catch (e) {
+          alert(e.message || 'Could not attach generated barcode');
+          return;
+        }
+      }
+      if (state.printerSettings && state.printerSettings.configured) {
+        try {
+          await api('/api/labels/print', {
+            method: 'POST',
+            body: JSON.stringify({ code, title: p.name, format: 'qr', orient: '2x1', copies: 1 }),
+          });
+          alert('Printed label ' + code + ' for "' + p.name + '" on SP310!');
+          return;
+        } catch {}
+      }
+      closeEditModal();
+      switchTab('labels');
+      document.getElementById('labelExistingProd').value = String(p.id);
+      document.getElementById('labelCodeInput').value = code;
+      document.getElementById('labelTitleInput').value = p.name;
+      labelBatchCodes = [code];
+      renderLabelPreview();
+    };
 
     document.getElementById('createKeyBtn').onclick = async () => {
       await api('/api/objects/api_keys', { method: 'POST', body: JSON.stringify({ description: 'Generated from Web UI' }) });
