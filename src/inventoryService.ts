@@ -30,6 +30,10 @@ export class InventoryService {
     return this.ctx.db;
   }
 
+  get photosDir() {
+    return this.ctx.photosDir;
+  }
+
   isPhotoReferenced(fileName: string): boolean {
     const inStock = this.db
       .prepare('SELECT 1 FROM stock WHERE photo_file_name = ? LIMIT 1')
@@ -44,7 +48,11 @@ export class InventoryService {
     const inReceipts = this.db
       .prepare('SELECT 1 FROM receipts WHERE photo_file_name = ? LIMIT 1')
       .get(fileName);
-    return Boolean(inReceipts);
+    if (inReceipts) return true;
+    const inRecipes = this.db
+      .prepare('SELECT 1 FROM recipes WHERE photo_file_name = ? LIMIT 1')
+      .get(fileName);
+    return Boolean(inRecipes);
   }
 
   cleanupPhotoIfUnused(fileName: string | null | undefined): void {

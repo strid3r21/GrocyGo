@@ -1,4 +1,5 @@
 import { InventoryService, NEVER_EXPIRES, todayIso, addDaysIso } from './inventoryService';
+import { MAX_PHOTO_BYTES, savePhotoBase64, savePhotoBuffer } from './photos';
 
 /**
  * Compact MCP (Model Context Protocol) Streamable HTTP handler with runtime-toggleable
@@ -247,6 +248,18 @@ const MCP_WRITE_TOOLS = [
         cook_minutes: { type: 'integer', description: 'Cook time in minutes.' },
         tags: { type: 'string', description: 'Comma-separated tags (e.g. "Dinner, Chicken, Quick").' },
         source_url: { type: 'string', description: 'Optional source URL or cookbook reference.' },
+        photo_url: {
+          type: 'string',
+          description: 'Optional HTTP/HTTPS image URL for the recipe photo (server downloads and stores it).',
+        },
+        photo_base64: {
+          type: 'string',
+          description: 'Optional base64-encoded image (or data:image/...;base64,... URI) for the recipe photo.',
+        },
+        photo_mime_type: {
+          type: 'string',
+          description: 'Optional MIME type when using photo_base64 (e.g. image/jpeg, image/png, image/webp; default image/jpeg).',
+        },
         ingredients: {
           type: 'array',
           description: 'List of ingredients. Pass product_id or product_name to link to inventory.',
@@ -285,6 +298,22 @@ const MCP_WRITE_TOOLS = [
         cook_minutes: { type: 'integer' },
         tags: { type: 'string' },
         source_url: { type: 'string' },
+        photo_url: {
+          type: ['string', 'null'],
+          description: 'HTTP/HTTPS image URL to set as the recipe photo (or null / "" to remove).',
+        },
+        photo_base64: {
+          type: 'string',
+          description: 'Base64-encoded image (or data:image/...;base64,... URI) to set as the recipe photo.',
+        },
+        photo_mime_type: {
+          type: 'string',
+          description: 'Optional MIME type when using photo_base64 (default image/jpeg).',
+        },
+        remove_photo: {
+          type: 'boolean',
+          description: 'Set true to remove the existing recipe photo.',
+        },
         ingredients: {
           type: 'array',
           items: {
@@ -390,11 +419,57 @@ function textResult(text: string, isError = false) {
   };
 }
 
-export function handleMcpJsonRpc(
+async function resolveRecipePhotoArg(
+  photosDir: string,
+  args: Record<string, any>,
+  allowClear: boolean
+): Promise<string | null | undefined> {
+  if (allowClear && (args.remove_photo === true || args.photo_url === null || args.photo_url === '')) {
+    return null;
+  }
+
+  if (typeof args.photo_base64 === 'string' && args.photo_base64.trim()) {
+    const mime =
+      typeof args.photo_mime_type === 'string' && args.photo_mime_type.trim()
+        ? args.photo_mime_type.trim()
+        : 'image/jpeg';
+    const saved = await savePhotoBase64(photosDir, args.photo_base64, mime);
+    return saved.fileName;
+  }
+
+  if (typeof args.photo_url === 'string' && args.photo_url.trim()) {
+    const rawUrl = args.photo_url.trim();
+    if (!/^https?:\/\//i.test(rawUrl)) {
+      throw new Error('photo_url must start with http:// or https://');
+    }
+    const imgRes = await fetch(rawUrl, { signal: AbortSignal.timeout(12_000) });
+    if (!imgRes.ok) {
+      throw new Error(`Could not download recipe image (HTTP ${imgRes.status})`);
+    }
+    const contentLength = Number(imgRes.headers.get('content-length') || 0);
+    if (contentLength > MAX_PHOTO_BYTES) {
+      throw new Error('Recipe image exceeds 12 MB limit');
+    }
+    const buf = Buffer.from(await imgRes.arrayBuffer());
+    if (buf.length === 0) {
+      throw new Error('Downloaded recipe image was empty');
+    }
+    const mime = (imgRes.headers.get('content-type') || 'image/jpeg').split(';')[0].trim().toLowerCase();
+    if (mime && !mime.startsWith('image/') && mime !== 'application/octet-stream') {
+      throw new Error(`URL did not return an image (content-type: ${mime})`);
+    }
+    const saved = await savePhotoBuffer(photosDir, buf, mime.startsWith('image/') ? mime : 'image/jpeg');
+    return saved.fileName;
+  }
+
+  return undefined;
+}
+
+export async function handleMcpJsonRpc(
   body: any,
   service: InventoryService,
   actingUserId: number | null = null
-): { status: number; response: any | null } {
+): Promise<{ status: number; response: any | null }> {
   if (!body || typeof body !== 'object' || body.jsonrpc !== '2.0') {
     return {
       status: 400,
@@ -514,7 +589,7 @@ export function handleMcpJsonRpc(
     }
 
     try {
-      const result = executeTool(toolName, args, service, actingUserId);
+      const result = await executeTool(toolName, args, service, actingUserId);
       return { status: 200, response: { jsonrpc: '2.0', id, result } };
     } catch (err: any) {
       return {
@@ -558,7 +633,7 @@ function resolveProductId(
   return null;
 }
 
-function executeTool(
+async function executeTool(
   name: string,
   args: Record<string, any>,
   service: InventoryService,
@@ -1164,9 +1239,10 @@ function executeTool(
     const lines = recipes.map((r) => {
       const urg =
         r.urgent_ingredient_count > 0 ? ` | urgent:${r.urgent_ingredient_count}` : '';
+      const photoPart = r.photo_file_name ? ' | photo:yes' : '';
       return `#${r.id} ${r.name} | ${r.in_stock_count}/${r.total_ingredients} in stock (${r.coverage_pct}%)${urg}${
         r.tags ? ` | [${r.tags}]` : ''
-      }`;
+      }${photoPart}`;
     });
     return textResult(lines.join('\n'));
   }
@@ -1193,6 +1269,7 @@ function executeTool(
     ];
     if (recipe.tags) lines.push(`Tags: ${recipe.tags}`);
     if (recipe.description) lines.push(`Description: ${recipe.description}`);
+    if (recipe.photo_file_name) lines.push(`Photo: /api/photos/${recipe.photo_file_name}`);
     lines.push('Ingredients:');
     for (const ing of recipe.ingredients) {
       const status = ing.in_stock
@@ -1216,6 +1293,7 @@ function executeTool(
   }
 
   if (name === 'create_recipe') {
+    const photoFileName = await resolveRecipePhotoArg(service.photosDir, args, false);
     const created = service.createRecipe(
       {
         name: String(args.name || ''),
@@ -1226,13 +1304,15 @@ function executeTool(
         cook_minutes: typeof args.cook_minutes === 'number' ? args.cook_minutes : null,
         tags: typeof args.tags === 'string' ? args.tags : '',
         source_url: typeof args.source_url === 'string' ? args.source_url : '',
+        photo_file_name: photoFileName ?? null,
         ingredients: Array.isArray(args.ingredients) ? args.ingredients : [],
       },
       actingUserId
     );
     const linked = created.ingredients.filter((i) => i.product_id).length;
+    const photoNote = created.photo_file_name ? ', photo saved' : '';
     return textResult(
-      `Created recipe #${created.id}: ${created.name} (${created.total_ingredients} ingredients, ${linked} linked to inventory, ${created.in_stock_count} in stock)`
+      `Created recipe #${created.id}: ${created.name} (${created.total_ingredients} ingredients, ${linked} linked to inventory, ${created.in_stock_count} in stock${photoNote})`
     );
   }
 
@@ -1246,6 +1326,7 @@ function executeTool(
       if (row) targetId = row.id;
     }
     if (!targetId) return textResult('Recipe not found. Provide recipe_id or exact name.', true);
+    const photoFileName = await resolveRecipePhotoArg(service.photosDir, args, true);
     const updated = service.updateRecipe(
       targetId,
       {
@@ -1261,12 +1342,19 @@ function executeTool(
         ...(args.cook_minutes !== undefined ? { cook_minutes: args.cook_minutes } : {}),
         ...(args.tags !== undefined ? { tags: String(args.tags) } : {}),
         ...(args.source_url !== undefined ? { source_url: String(args.source_url) } : {}),
+        ...(photoFileName !== undefined ? { photo_file_name: photoFileName } : {}),
         ...(Array.isArray(args.ingredients) ? { ingredients: args.ingredients } : {}),
       },
       actingUserId
     );
+    const photoNote =
+      photoFileName === null
+        ? ', photo removed'
+        : typeof photoFileName === 'string'
+        ? ', photo updated'
+        : '';
     return textResult(
-      `Updated recipe #${updated.id}: ${updated.name} (${updated.in_stock_count}/${updated.total_ingredients} in stock)`
+      `Updated recipe #${updated.id}: ${updated.name} (${updated.in_stock_count}/${updated.total_ingredients} in stock${photoNote})`
     );
   }
 

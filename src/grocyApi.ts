@@ -593,6 +593,18 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
               body.mime_type || 'image/jpeg'
             );
             photoFileName = saved.fileName;
+          } else if (typeof body.photo_url === 'string' && /^https?:\/\//i.test(body.photo_url.trim())) {
+            try {
+              const imgRes = await fetch(body.photo_url.trim(), { signal: AbortSignal.timeout(10_000) });
+              if (imgRes.ok) {
+                const buf = Buffer.from(await imgRes.arrayBuffer());
+                const mime = imgRes.headers.get('content-type') || 'image/jpeg';
+                const saved = await savePhotoBuffer(ctx.photosDir, buf, mime);
+                photoFileName = saved.fileName;
+              }
+            } catch {
+              // ignore remote image download failure
+            }
           }
           const updated = service.updateRecipe(
             recipeId,
@@ -781,7 +793,7 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
       if (pathname === '/mcp') {
         if (method === 'POST') {
           const body = await readJsonBody(req);
-          const { status, response } = handleMcpJsonRpc(body, service, currentUser.id);
+          const { status, response } = await handleMcpJsonRpc(body, service, currentUser.id);
           if (response === null) {
             res.writeHead(status, { 'Access-Control-Allow-Origin': '*' });
             res.end();

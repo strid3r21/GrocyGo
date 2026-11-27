@@ -1187,6 +1187,12 @@ async function runTests() {
       body: JSON.stringify({ read_enabled: true, write_enabled: true, delete_enabled: true }),
     });
 
+    const recipeImgBuf = await sharp({
+      create: { width: 64, height: 64, channels: 3, background: { r: 200, g: 80, b: 60 } },
+    })
+      .png()
+      .toBuffer();
+
     const mcpCreateRec = await fetch(`${base}/mcp`, {
       method: 'POST',
       headers,
@@ -1204,6 +1210,7 @@ async function runTests() {
             cook_minutes: 25,
             tags: 'Dinner, Soup',
             instructions: 'Simmer tomatoes and stir in milk.',
+            photo_base64: `data:image/png;base64,${recipeImgBuf.toString('base64')}`,
             ingredients: [
               { product_id: prodId, ingredient_name: 'Organic Whole Milk', amount: 1, unit: 'cup' },
               { ingredient_name: 'Crushed Tomatoes', amount: 2, unit: 'cans' },
@@ -1214,14 +1221,17 @@ async function runTests() {
     }).then((r) => r.json());
     assert.ok(!mcpCreateRec.result.isError, JSON.stringify(mcpCreateRec));
     assert.ok(mcpCreateRec.result.content[0].text.includes('Creamy Tomato Soup'));
+    assert.ok(mcpCreateRec.result.content[0].text.includes('photo saved'));
 
     const recipesList = await fetch(`${base}/api/recipes?sort=urgent`, { headers }).then((r) => r.json());
     assert.equal(recipesList.length, 1);
     assert.equal(recipesList[0].in_stock_count, 1);
     assert.equal(recipesList[0].missing_count, 1);
     assert.equal(recipesList[0].coverage_pct, 50);
+    assert.ok(recipesList[0].photo_file_name, 'MCP create_recipe photo_base64 should save photo_file_name');
 
     const recId = recipesList[0].id;
+    const savedPhotoFile = recipesList[0].photo_file_name;
     const mcpGetRec = await fetch(`${base}/mcp`, {
       method: 'POST',
       headers,
@@ -1234,6 +1244,7 @@ async function runTests() {
     }).then((r) => r.json());
     assert.ok(mcpGetRec.result.content[0].text.includes('IN STOCK'));
     assert.ok(mcpGetRec.result.content[0].text.includes('MISSING'));
+    assert.ok(mcpGetRec.result.content[0].text.includes(`Photo: /api/photos/${savedPhotoFile}`));
 
     const shopAddRec = await fetch(`${base}/api/recipes/${recId}/add-missing-to-shopping`, {
       method: 'POST',
@@ -1280,11 +1291,36 @@ async function runTests() {
         method: 'tools/call',
         params: {
           name: 'update_recipe',
-          arguments: { recipe_id: recId, new_name: 'Roasted Tomato Soup', servings: 6 },
+          arguments: {
+            recipe_id: recId,
+            new_name: 'Roasted Tomato Soup',
+            servings: 6,
+            photo_url: `${base}/api/photos/${savedPhotoFile}?api_key=test_secret_key_123`,
+          },
         },
       }),
     }).then((r) => r.json());
+    assert.ok(!mcpUpdateRec.result.isError, JSON.stringify(mcpUpdateRec));
     assert.ok(mcpUpdateRec.result.content[0].text.includes('Roasted Tomato Soup'));
+    assert.ok(mcpUpdateRec.result.content[0].text.includes('photo updated'));
+
+    const mcpRemovePhoto = await fetch(`${base}/mcp`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 8035,
+        method: 'tools/call',
+        params: {
+          name: 'update_recipe',
+          arguments: { recipe_id: recId, remove_photo: true },
+        },
+      }),
+    }).then((r) => r.json());
+    assert.ok(!mcpRemovePhoto.result.isError, JSON.stringify(mcpRemovePhoto));
+    assert.ok(mcpRemovePhoto.result.content[0].text.includes('photo removed'));
+    const recNoPhoto = await fetch(`${base}/api/recipes/${recId}`, { headers }).then((r) => r.json());
+    assert.equal(recNoPhoto.photo_file_name, null);
 
     const mcpDelRec = await fetch(`${base}/mcp`, {
       method: 'POST',
@@ -1301,7 +1337,7 @@ async function runTests() {
     const recipesAfter = await fetch(`${base}/api/recipes`, { headers }).then((r) => r.json());
     assert.equal(recipesAfter.length, 0);
 
-    console.log('ALL SERVER v2.4.3 TESTS PASSED!');
+    console.log('ALL SERVER v2.4.4 TESTS PASSED!');
     console.log('\nSample compact MCP inventory_summary output:\n' + summaryText);
     console.log('\nSample compact MCP search_inventory output:\n' + searchText);
   } finally {
