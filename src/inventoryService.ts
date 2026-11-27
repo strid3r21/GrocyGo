@@ -1697,6 +1697,9 @@ export class InventoryService {
     const rows = (listId ? this.db.prepare(sql).all(listId) : this.db.prepare(sql).all()) as any[];
     return rows.map((r) => ({
       ...r,
+      unit: String(r.unit || '').trim(),
+      qu_name: String(r.unit || '').trim() || r.qu_name || null,
+      qu_name_plural: String(r.unit || '').trim() || r.qu_name_plural || null,
       recipe_names: this.parseRecipeNames(r.recipe_names),
     }));
   }
@@ -3449,12 +3452,13 @@ export class InventoryService {
     if (!recipe) throw new Error(`Recipe #${recipeId} not found`);
 
     const openShopping = this.db
-      .prepare('SELECT id, product_id, note, amount, recipe_names FROM shopping_list WHERE done = 0')
+      .prepare('SELECT id, product_id, note, amount, unit, recipe_names FROM shopping_list WHERE done = 0')
       .all() as Array<{
         id: number;
         product_id: number | null;
         note: string | null;
         amount: number;
+        unit: string | null;
         recipe_names: string | null;
       }>;
 
@@ -3468,7 +3472,8 @@ export class InventoryService {
       const displayLabel = (ing.product_name || ing.ingredient_name).trim();
       if (!displayLabel) continue;
       const lowerLabel = displayLabel.toLowerCase();
-      const addQty = Math.max(1, Math.ceil(ing.amount || 1));
+      const ingUnit = String(ing.unit || '').trim();
+      const addQty = Math.max(0.25, Math.round(Number(ing.amount || 1) * 100) / 100);
 
       const existing = openShopping.find((s) => {
         if (ing.product_id && s.product_id && Number(s.product_id) === Number(ing.product_id)) {
@@ -3495,29 +3500,32 @@ export class InventoryService {
           : [...currentRecipes, recipe.name];
         const nextAmount = Math.round((Number(existing.amount || 0) + addQty) * 100) / 100;
         const cleanExistingNote = existing.product_id ? '' : displayLabel;
+        const nextUnit = String(existing.unit || '').trim() || ingUnit;
 
         this.db
-          .prepare('UPDATE shopping_list SET amount = ?, note = ?, recipe_names = ? WHERE id = ?')
-          .run(nextAmount, cleanExistingNote, JSON.stringify(nextRecipes), existing.id);
+          .prepare('UPDATE shopping_list SET amount = ?, note = ?, unit = ?, recipe_names = ? WHERE id = ?')
+          .run(nextAmount, cleanExistingNote, nextUnit, JSON.stringify(nextRecipes), existing.id);
 
         existing.amount = nextAmount;
         existing.note = cleanExistingNote;
+        existing.unit = nextUnit;
         existing.recipe_names = JSON.stringify(nextRecipes);
       } else {
         const cleanNote = ing.product_id ? '' : displayLabel;
         const nextRecipesJson = JSON.stringify([recipe.name]);
         const info = this.db
           .prepare(
-            `INSERT INTO shopping_list (product_id, note, amount, shopping_list_id, done, added_by_user_id, recipe_names)
-             VALUES (?, ?, ?, 1, 0, ?, ?)`
+            `INSERT INTO shopping_list (product_id, note, amount, unit, shopping_list_id, done, added_by_user_id, recipe_names)
+             VALUES (?, ?, ?, ?, 1, 0, ?, ?)`
           )
-          .run(ing.product_id || null, cleanNote, addQty, userId ?? null, nextRecipesJson);
+          .run(ing.product_id || null, cleanNote, addQty, ingUnit, userId ?? null, nextRecipesJson);
 
         openShopping.push({
           id: Number(info.lastInsertRowid),
           product_id: ing.product_id || null,
           note: cleanNote,
           amount: addQty,
+          unit: ingUnit,
           recipe_names: nextRecipesJson,
         });
       }

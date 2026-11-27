@@ -1267,6 +1267,7 @@ async function runTests() {
     const tomShopRows = shopListRows.filter((s: any) => s.note === 'Crushed Tomatoes');
     assert.equal(tomShopRows.length, 1);
     assert.equal(Number(tomShopRows[0].amount), 3);
+    assert.equal(tomShopRows[0].unit, 'cans');
     assert.deepEqual(tomShopRows[0].recipe_names, ['Creamy Tomato Soup', 'Marinara Pasta']);
     await fetch(`${base}/api/recipes/${rec2.id}`, { method: 'DELETE', headers });
 
@@ -1300,7 +1301,7 @@ async function runTests() {
     const recipesAfter = await fetch(`${base}/api/recipes`, { headers }).then((r) => r.json());
     assert.equal(recipesAfter.length, 0);
 
-    console.log('ALL SERVER v2.4.2 TESTS PASSED!');
+    console.log('ALL SERVER v2.4.3 TESTS PASSED!');
     console.log('\nSample compact MCP inventory_summary output:\n' + summaryText);
     console.log('\nSample compact MCP search_inventory output:\n' + searchText);
   } finally {

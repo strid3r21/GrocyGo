@@ -314,6 +314,9 @@ export function initDatabase(dataDir: string): DbContext {
   if (!hasColumn(db, 'shopping_list', 'recipe_names')) {
     db.exec("ALTER TABLE shopping_list ADD COLUMN recipe_names TEXT DEFAULT '';");
   }
+  if (!hasColumn(db, 'shopping_list', 'unit')) {
+    db.exec("ALTER TABLE shopping_list ADD COLUMN unit TEXT DEFAULT '';");
+  }
 
   // Migrate legacy stock_log tables created in v1.1.0 where product_id had a NOT NULL constraint
   const stockLogCols = db.prepare('PRAGMA table_info(stock_log)').all() as Array<{
