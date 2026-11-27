@@ -2595,7 +2595,7 @@ export function renderWebUiHtml(): string {
             <div style="display:flex;align-items:center;gap:10px;width:100%;height:100%;">
               <img src="\${imgUrl}" alt="QR" style="width:126px;height:126px;display:block;flex-shrink:0;" />
               <div style="flex:1;min-width:0;text-align:left;">
-                <div style="font-size:14px;font-weight:700;line-height:1.2;word-break:break-word;">\${escapeHtml(title || 'GrocyGo Item')}</div>
+                \${title && title.toLowerCase() !== code.toLowerCase() ? \`<div style="font-size:14px;font-weight:700;line-height:1.2;word-break:break-word;">\${escapeHtml(title)}</div>\` : ''}
                 \${sub ? \`<div style="font-size:11px;color:#333;margin-top:3px;word-break:break-word;">\${escapeHtml(sub)}</div>\` : ''}
                 <div style="font-family:monospace;font-size:11px;font-weight:700;margin-top:6px;">\${escapeHtml(code)}</div>
               </div>
@@ -2700,11 +2700,12 @@ export function renderWebUiHtml(): string {
 
       const pagesArr = [];
       for (const entry of svgs) {
+        const cleanTitle = title && title.toLowerCase() !== entry.code.toLowerCase() ? title : '';
         const oneHtml = format === 'qr'
           ? (orient === '1x2'
-            ? \`<div class="lbl portrait"><div class="brand">GrocyGo</div><div class="qr-box">\${entry.svg}</div><div class="meta">\${title ? '<div class="t">' + escapeHtml(title) + '</div>' : ''}\${sub ? '<div class="s">' + escapeHtml(sub) + '</div>' : ''}<div class="c">\${escapeHtml(entry.code)}</div></div></div>\`
-            : \`<div class="lbl landscape"><div class="brand">GrocyGo</div><div class="qr-box">\${entry.svg}</div><div class="meta"><div class="t">\${escapeHtml(title || 'GrocyGo')}</div>\${sub ? '<div class="s">' + escapeHtml(sub) + '</div>' : ''}<div class="c">\${escapeHtml(entry.code)}</div></div></div>\`)
-          : \`<div class="lbl bar"><div class="brand">GrocyGo</div>\${title ? '<div class="t">' + escapeHtml(title) + '</div>' : ''}<div class="bar-box">\${entry.svg}</div>\${sub ? '<div class="s">' + escapeHtml(sub) + '</div>' : ''}</div>\`;
+            ? \`<div class="lbl portrait"><div class="brand">GrocyGo</div><div class="qr-box">\${entry.svg}</div><div class="meta">\${cleanTitle ? '<div class="t">' + escapeHtml(cleanTitle) + '</div>' : ''}\${sub ? '<div class="s">' + escapeHtml(sub) + '</div>' : ''}<div class="c">\${escapeHtml(entry.code)}</div></div></div>\`
+            : \`<div class="lbl landscape"><div class="brand">GrocyGo</div><div class="qr-box">\${entry.svg}</div><div class="meta">\${cleanTitle ? '<div class="t">' + escapeHtml(cleanTitle) + '</div>' : ''}\${sub ? '<div class="s">' + escapeHtml(sub) + '</div>' : ''}<div class="c">\${escapeHtml(entry.code)}</div></div></div>\`)
+          : \`<div class="lbl bar"><div class="brand">GrocyGo</div>\${cleanTitle ? '<div class="t">' + escapeHtml(cleanTitle) + '</div>' : ''}<div class="bar-box">\${entry.svg}</div>\${sub ? '<div class="s">' + escapeHtml(sub) + '</div>' : ''}</div>\`;
         for (let k = 0; k < copies; k++) pagesArr.push('<div class="pg">' + oneHtml + '</div>');
       }
 

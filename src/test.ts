@@ -1150,7 +1150,7 @@ async function runTests() {
     assert.ok(dryPrint.tspl.includes('GG-TEST01'));
     assert.ok(dryPrint.tspl.includes('PRINT 2,1'));
 
-    console.log('ALL SERVER v2.3.3 TESTS PASSED!');
+    console.log('ALL SERVER v2.3.4 TESTS PASSED!');
     console.log('\nSample compact MCP inventory_summary output:\n' + summaryText);
     console.log('\nSample compact MCP search_inventory output:\n' + searchText);
   } finally {
