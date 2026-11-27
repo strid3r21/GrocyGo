@@ -1507,7 +1507,7 @@ export function renderWebUiHtml(): string {
     // Edit Item Modal
     window.closeEditModal = (updateUrl = true) => {
       document.getElementById('editModal').classList.remove('open');
-      if (updateUrl && /^\/(item|inventory)\/\d+/.test(window.location.pathname)) {
+      if (updateUrl && /^\\/(item|inventory)\\/\\d+/.test(window.location.pathname)) {
         history.replaceState(null, '', '/inventory');
       }
     };
@@ -1929,7 +1929,7 @@ export function renderWebUiHtml(): string {
 
     window.closeReceiptModal = (updateUrl = true) => {
       document.getElementById('receiptModal').classList.remove('open');
-      if (updateUrl && /^\/receipts\/\d+/.test(window.location.pathname)) {
+      if (updateUrl && /^\\/receipts\\/\\d+/.test(window.location.pathname)) {
         history.replaceState(null, '', '/receipts');
       }
     };
@@ -1956,7 +1956,7 @@ export function renderWebUiHtml(): string {
       const pWrap = document.getElementById('recPhotoPreviewWrap');
       if (r.photo_file_name) {
         pWrap.className = '';
-        pWrap.innerHTML = '<button class="sm" type="button" onclick="openPhoto(\'' + escapeAttr(r.photo_file_name) + '\', \'Receipt Photo\', \'receipt\', ' + r.id + ')">View Receipt Photo</button>';
+        pWrap.innerHTML = \`<button class="sm" type="button" onclick="openPhoto('\${escapeAttr(r.photo_file_name)}', 'Receipt Photo', 'receipt', \${r.id})">View Receipt Photo</button>\`;
       } else {
         pWrap.className = 'hidden';
       }
@@ -2729,14 +2729,14 @@ export function renderWebUiHtml(): string {
     };
 
     function applyRouteFromUrl() {
-      const p = window.location.pathname.replace(/\/+$/, '') || '/';
-      const itemMatch = p.match(/^\/(?:item|inventory)\/(\d+)$/);
+      const p = window.location.pathname.replace(/\\/+$/, '') || '/';
+      const itemMatch = p.match(/^\\/(?:item|inventory)\\/(\\d+)$/);
       if (itemMatch) {
         switchTab('inventory', false);
         openEditModal(Number(itemMatch[1]), false);
         return;
       }
-      const receiptMatch = p.match(/^\/receipts\/(\d+)$/);
+      const receiptMatch = p.match(/^\\/receipts\\/(\\d+)$/);
       if (receiptMatch) {
         switchTab('receipts', false);
         openReceiptModal(Number(receiptMatch[1]), false);
@@ -2744,7 +2744,7 @@ export function renderWebUiHtml(): string {
       }
       closeEditModal(false);
       closeReceiptModal(false);
-      const tabMatch = p.match(/^\/(inventory|stats|receipts|shopping|labels|locations|activity|users|import|keys)$/);
+      const tabMatch = p.match(/^\\/(inventory|stats|receipts|shopping|labels|locations|activity|users|import|keys)$/);
       if (tabMatch) {
         switchTab(tabMatch[1], false);
       } else {

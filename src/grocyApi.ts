@@ -214,7 +214,7 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
       }
 
       if (method === 'GET' && pathname === '/api/health') {
-        sendJson(res, 200, { ok: true, service: 'grocygo-server', version: '2.2.0' });
+        sendJson(res, 200, { ok: true, service: 'grocygo-server', version: '2.2.1' });
         return;
       }
 

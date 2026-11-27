@@ -1103,7 +1103,20 @@ async function runTests() {
       'Stats must include spend by store'
     );
 
-    console.log('ALL SERVER v2.2.0 TESTS PASSED!');
+    // 29. Web UI HTML & inline JS syntax verification + SPA dedicated URL routes
+    for (const uiPath of ['/', '/inventory', '/stats', '/receipts', '/item/1', '/receipts/1']) {
+      const uiRes = await fetch(`${base}${uiPath}`);
+      assert.equal(uiRes.status, 200, `Web UI route ${uiPath} must return 200`);
+      if (uiPath === '/') {
+        const html = await uiRes.text();
+        const scriptMatch = html.match(/<script>([\s\S]*?)<\/script>/);
+        assert.ok(scriptMatch && scriptMatch[1], 'Web UI must contain inline script');
+        // Compile inline JS to catch any template-literal regex/syntax errors automatically
+        new Function(scriptMatch[1]);
+      }
+    }
+
+    console.log('ALL SERVER v2.2.1 TESTS PASSED!');
     console.log('\nSample compact MCP inventory_summary output:\n' + summaryText);
     console.log('\nSample compact MCP search_inventory output:\n' + searchText);
   } finally {
