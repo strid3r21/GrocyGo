@@ -183,8 +183,16 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
     }
 
     try {
-      // Public routes: Web UI, Health check, and Username/Password Login
-      if (method === 'GET' && (pathname === '/' || pathname === '/index.html')) {
+      // Public routes: Web UI (all SPA tab/item/receipt paths), Health check, and Username/Password Login
+      const isWebUiRoute =
+        method === 'GET' &&
+        (pathname === '/' ||
+          pathname === '/index.html' ||
+          /^\/(inventory|stats|receipts|shopping|labels|locations|activity|users|import|keys)(\/\d+)?\/?$/.test(
+            pathname
+          ) ||
+          /^\/item\/\d+\/?$/.test(pathname));
+      if (isWebUiRoute) {
         const html = renderWebUiHtml();
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         res.end(html);
@@ -206,7 +214,7 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
       }
 
       if (method === 'GET' && pathname === '/api/health') {
-        sendJson(res, 200, { ok: true, service: 'grocygo-server', version: '1.7.0' });
+        sendJson(res, 200, { ok: true, service: 'grocygo-server', version: '2.2.0' });
         return;
       }
 
@@ -413,6 +421,11 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
             return;
           }
           sendJson(res, 200, r);
+          return;
+        }
+        if (method === 'PUT') {
+          const body = await readJsonBody(req);
+          sendJson(res, 200, service.updateReceipt(receiptId, body, currentUser.id));
           return;
         }
         if (method === 'DELETE') {

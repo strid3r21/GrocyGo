@@ -1062,7 +1062,48 @@ async function runTests() {
     );
     assert.ok(!remainingUnlinked.some((ri: any) => ri.id === suggested[0].id));
 
-    console.log('ALL SERVER v2.1.0 TESTS PASSED!');
+    // 28. Edit receipt (fix store name, date, and linked item price) -> propagates to price_history & stats by_store
+    const updatedReceipt = await fetch(`${base}/api/receipts/${createdReceipt.id}`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({
+        store_name: 'Costco Wholesale',
+        purchase_date: '2026-11-25',
+        total_amount: 12.47,
+        items: [
+          {
+            id: suggested[0].id,
+            raw_name: 'ORGANIC WHOLE MILK',
+            quantity: 1,
+            unit_price: 5.49,
+            matched_product_id: prodId,
+          },
+          {
+            raw_name: 'AVOCADOS BAG',
+            quantity: 1,
+            unit_price: 6.98,
+            matched_product_id: null,
+          },
+        ],
+      }),
+    }).then((r) => r.json());
+    assert.equal(updatedReceipt.store_name, 'Costco Wholesale');
+    assert.equal(updatedReceipt.items.length, 2);
+
+    const updatedPriceHist = await fetch(`${base}/api/products/${prodId}/price-history`, { headers }).then((r) =>
+      r.json()
+    );
+    assert.equal(updatedPriceHist.latest_price, 5.49, 'Fixing receipt item price must update linked price_history');
+    assert.equal(updatedPriceHist.history[0].store_name, 'Costco Wholesale');
+    assert.equal(updatedPriceHist.history[0].purchased_date, '2026-11-25');
+
+    const statsWithStores = await fetch(`${base}/api/stats?days=30`, { headers }).then((r) => r.json());
+    assert.ok(
+      statsWithStores.by_store.some((s: any) => s.store_name === 'Costco Wholesale' && s.total_spent >= 12.47),
+      'Stats must include spend by store'
+    );
+
+    console.log('ALL SERVER v2.2.0 TESTS PASSED!');
     console.log('\nSample compact MCP inventory_summary output:\n' + summaryText);
     console.log('\nSample compact MCP search_inventory output:\n' + searchText);
   } finally {

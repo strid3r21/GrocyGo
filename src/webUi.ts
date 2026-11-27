@@ -281,6 +281,7 @@ export function renderWebUiHtml(): string {
     <nav id="navTabs" class="hidden" aria-label="Main navigation">
       <button data-tab="inventory" class="active">Inventory</button>
       <button data-tab="stats">Stats</button>
+      <button data-tab="receipts">Receipts</button>
       <button data-tab="shopping">Shopping</button>
       <button data-tab="labels">Labels</button>
       <button data-tab="locations">Locations</button>
@@ -401,6 +402,40 @@ export function renderWebUiHtml(): string {
         </div>
         <div id="statsKpis" class="kpi-grid"></div>
         <div id="statsPanels" class="stats-grid"></div>
+      </div>
+
+      <!-- Receipts Tab -->
+      <div id="tab-receipts" class="hidden">
+        <div class="card" style="padding:14px;">
+          <div class="between" style="margin-bottom:10px;">
+            <div>
+              <h3 style="margin:0;">Receipts &amp; Store Spending</h3>
+              <div class="muted">Review OCR receipts, fix store names or prices, and automatically update linked item price history.</div>
+            </div>
+            <div class="row">
+              <label class="sm" style="display:inline-flex;align-items:center;cursor:pointer;background:var(--primary);color:var(--on-primary);border:1px solid var(--primary);border-radius:9px;padding:6px 12px;min-height:36px;font-size:13px;font-weight:600;">
+                Upload &amp; OCR Receipt
+                <input id="uploadReceiptFile" type="file" accept="image/*" style="display:none;" />
+              </label>
+              <button id="newManualReceiptBtn" class="sm" type="button">+ Manual Receipt</button>
+              <button id="refreshReceiptsBtn" class="sm" type="button">Refresh</button>
+            </div>
+          </div>
+          <div id="receiptOcrStatus" class="hidden"></div>
+          <div class="row" style="margin-top:8px;">
+            <select id="receiptStoreFilter" aria-label="Filter by store" style="min-width:170px;"></select>
+            <select id="receiptSortBy" aria-label="Sort receipts">
+              <option value="date_desc">Sort: Date (Newest)</option>
+              <option value="date_asc">Sort: Date (Oldest)</option>
+              <option value="total_desc">Sort: Total (High → Low)</option>
+              <option value="total_asc">Sort: Total (Low → High)</option>
+              <option value="store_asc">Sort: Store (A–Z)</option>
+            </select>
+            <span id="receiptsTotalSummary" class="tag" style="padding:6px 10px;font-size:13px;"></span>
+          </div>
+          <div id="receiptStoreChips" class="row" style="margin-top:10px;gap:6px;"></div>
+        </div>
+        <div id="receiptsList"></div>
       </div>
 
       <!-- Shopping Tab (Global household list: Delete left, Checkbox right) -->
@@ -717,11 +752,11 @@ export function renderWebUiHtml(): string {
   </main>
 
   <!-- Edit Item Modal -->
-  <div id="editModal" class="modal-backdrop" onclick="if(event.target===this)this.classList.remove('open')">
+  <div id="editModal" class="modal-backdrop" onclick="if(event.target===this)closeEditModal()">
     <div class="modal-box">
       <div class="between" style="margin-bottom:14px;">
         <h3 style="margin:0;">Edit Item</h3>
-        <button class="sm" onclick="document.getElementById('editModal').classList.remove('open')">Close</button>
+        <button class="sm" onclick="closeEditModal()">Close</button>
       </div>
       <div class="field">
         <label for="editName">Name</label>
@@ -784,6 +819,45 @@ export function renderWebUiHtml(): string {
     </div>
   </div>
 
+  <!-- Edit / Create Receipt Modal -->
+  <div id="receiptModal" class="modal-backdrop" onclick="if(event.target===this)closeReceiptModal()">
+    <div class="modal-box" style="max-width:660px;">
+      <div class="between" style="margin-bottom:12px;">
+        <h3 style="margin:0;" id="receiptModalTitle">Edit Receipt</h3>
+        <button class="sm" type="button" onclick="closeReceiptModal()">Close</button>
+      </div>
+      <div class="row" style="gap:10px;">
+        <div class="field" style="flex:1.4;">
+          <label for="recStoreInput">Store Name</label>
+          <input id="recStoreInput" list="storeNameSuggestions" placeholder="e.g. Costco, Trader Joe's" />
+          <datalist id="storeNameSuggestions"></datalist>
+        </div>
+        <div class="field" style="flex:1;">
+          <label for="recDateInput">Purchase Date</label>
+          <input id="recDateInput" type="date" />
+        </div>
+        <div class="field" style="flex:0.8;">
+          <label for="recTotalInput">Total ($)</label>
+          <input id="recTotalInput" type="number" step="0.01" min="0" placeholder="0.00" />
+        </div>
+      </div>
+      <div id="recPhotoPreviewWrap" class="hidden" style="margin-bottom:12px;"></div>
+      <div class="between" style="margin-bottom:6px;">
+        <strong style="font-size:13px;">Line Items (editing price/store updates linked item history)</strong>
+        <div class="row" style="gap:6px;">
+          <button id="recSumTotalBtn" class="sm" type="button">Sum Total</button>
+          <button id="recAddLineBtn" class="sm" type="button">+ Add Line</button>
+        </div>
+      </div>
+      <div id="recItemsEditor" style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px;"></div>
+      <div id="recModalErr" class="hidden"></div>
+      <div class="row" style="gap:8px;margin-top:8px;">
+        <button id="recDeleteBtn" class="danger hidden" type="button">Delete Receipt</button>
+        <button id="recSaveBtn" class="primary" type="button" style="flex:1;">Save Receipt Changes</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Photo Lightbox -->
   <div id="lightbox" class="modal-backdrop lightbox" onclick="if(event.target===this)this.classList.remove('open')">
     <div style="text-align:center;" onclick="event.stopPropagation()">
@@ -821,8 +895,12 @@ export function renderWebUiHtml(): string {
   <script>
     let apiKey = localStorage.getItem('grocygo_key') || '';
     let currentUser = null;
-    let state = { stock: [], products: [], barcodes: [], groups: [], locations: [], units: [], shopping: [], keys: [], activity: [], users: [], backups: [], mcpSettings: { read_enabled: true, write_enabled: false }, alertSettings: { expiring_soon_enabled: true, expiring_soon_days: 5, expiring_soon_hour: 9, auto_add_below_min_stock: false, last_expiring_soon_notif_date: null }, stats: null };
+    let state = { stock: [], products: [], barcodes: [], groups: [], locations: [], units: [], shopping: [], keys: [], activity: [], users: [], backups: [], receipts: [], mcpSettings: { read_enabled: true, write_enabled: false }, alertSettings: { expiring_soon_enabled: true, expiring_soon_days: 5, expiring_soon_hour: 9, auto_add_below_min_stock: false, last_expiring_soon_notif_date: null }, stats: null };
     let statsDays = 30;
+    let editingReceiptId = null;
+    let editingReceiptPhoto = null;
+    let editingReceiptOcr = '';
+    let editingReceiptItems = [];
     let invViewMode = 'stock';
     let selectedIds = new Set();
     let editingProductId = null;
@@ -895,7 +973,7 @@ export function renderWebUiHtml(): string {
     };
 
     async function loadAll() {
-      const [me, stock, products, barcodes, groups, locations, units, shopping, keys, activity, users, backups, mcpSettings, alertSettings, stats] = await Promise.all([
+      const [me, stock, products, barcodes, groups, locations, units, shopping, keys, activity, users, backups, receipts, mcpSettings, alertSettings, stats] = await Promise.all([
         api('/api/auth/me'),
         api('/api/stock'),
         api('/api/objects/products'),
@@ -908,12 +986,13 @@ export function renderWebUiHtml(): string {
         api('/api/activity?limit=80'),
         api('/api/users').catch(() => []),
         api('/api/backups').catch(() => []),
+        api('/api/receipts?limit=100').catch(() => []),
         api('/api/mcp/settings').catch(() => ({ read_enabled: true, write_enabled: false })),
         api('/api/settings/alerts').catch(() => ({ expiring_soon_enabled: true, expiring_soon_days: 5, expiring_soon_hour: 9, auto_add_below_min_stock: false, last_expiring_soon_notif_date: null })),
         api('/api/stats?days=' + statsDays).catch(() => null),
       ]);
       currentUser = me;
-      state = { stock, products, barcodes, groups, locations, units, shopping, keys, activity, users, backups, mcpSettings, alertSettings, stats };
+      state = { stock, products, barcodes, groups, locations, units, shopping, keys, activity, users, backups, receipts, mcpSettings, alertSettings, stats };
       const validIds = new Set(products.map((p) => p.id));
       for (const id of [...selectedIds]) {
         if (!validIds.has(id)) selectedIds.delete(id);
@@ -991,6 +1070,8 @@ export function renderWebUiHtml(): string {
       location_edit: 'updated location',
       group_create: 'created group',
       group_edit: 'updated group',
+      receipt_create: 'saved receipt',
+      receipt_edit: 'edited receipt',
     };
 
     function getVisibleRows() {
@@ -1115,7 +1196,7 @@ export function renderWebUiHtml(): string {
                         </div>
                       </td>
                       <td>
-                        <strong>\${escapeHtml(p.name)}</strong>
+                        <a href="/item/\${p.id}" onclick="event.preventDefault();openEditModal(\${p.id})" style="color:var(--text);text-decoration:none;"><strong>\${escapeHtml(p.name)}</strong></a>
                         \${p.description ? \`<div class="muted" style="font-size:12px;">\${escapeHtml(p.description)}</div>\` : ''}
                       </td>
                       <td>\${grp ? \`<span class="tag">\${escapeHtml(grp.name)}</span>\` : '<span class="muted">—</span>'}</td>
@@ -1249,6 +1330,7 @@ export function renderWebUiHtml(): string {
       }
 
       renderStats();
+      renderReceipts();
 
       const mcp = state.mcpSettings || { read_enabled: true, write_enabled: false, delete_enabled: false };
       const readChk = document.getElementById('mcpReadToggle');
@@ -1423,11 +1505,20 @@ export function renderWebUiHtml(): string {
     }
 
     // Edit Item Modal
-    window.openEditModal = (productId) => {
+    window.closeEditModal = (updateUrl = true) => {
+      document.getElementById('editModal').classList.remove('open');
+      if (updateUrl && /^\/(item|inventory)\/\d+/.test(window.location.pathname)) {
+        history.replaceState(null, '', '/inventory');
+      }
+    };
+    window.openEditModal = (productId, pushUrl = true) => {
       const p = state.products.find((x) => x.id === productId);
       if (!p) return;
       const s = state.stock.find((x) => x.product_id === productId);
       editingProductId = productId;
+      if (pushUrl && window.location.pathname !== '/item/' + productId) {
+        history.pushState(null, '', '/item/' + productId);
+      }
       document.getElementById('editName').value = p.name || '';
       document.getElementById('editDesc').value = p.description || '';
       document.getElementById('editAmount').value = s ? String(s.amount) : '0';
@@ -1623,6 +1714,11 @@ export function renderWebUiHtml(): string {
         val: Number(g.item_count || 0),
         text: g.item_count + ' (' + g.total_units + ')',
       }));
+      const storeRows = (st.by_store || []).map((s) => ({
+        label: s.store_name,
+        val: Number(s.total_spent || 0),
+        text: '$' + Number(s.total_spent || 0).toFixed(2) + ' (' + s.receipt_count + ')',
+      }));
       const topConsumedRows = (st.top_consumed || []).map((c) => ({
         label: c.name,
         val: Number(c.total_used || 0),
@@ -1644,6 +1740,7 @@ export function renderWebUiHtml(): string {
         <div class="card"><h3 style="margin-top:0;">Most Consumed (\${st.window_days}d)</h3>\${makeBars(topConsumedRows)}</div>
         <div class="card"><h3 style="margin-top:0;">By Storage Location</h3>\${makeBars(locRows)}</div>
         <div class="card"><h3 style="margin-top:0;">By Product Group</h3>\${makeBars(grpRows)}</div>
+        <div class="card"><h3 style="margin-top:0;">Spend by Store (\${st.window_days}d)</h3>\${makeBars(storeRows)}</div>
         <div class="card"><h3 style="margin-top:0;">Top Spoiled / Wasted (\${st.window_days}d)</h3>\${topSpoiledHtml}</div>
         <div class="card"><h3 style="margin-top:0;">Household Activity (\${st.window_days}d)</h3>\${userHtml}</div>
         <div class="card">
@@ -1665,6 +1762,323 @@ export function renderWebUiHtml(): string {
     document.getElementById('refreshStatsBtn').onclick = async () => {
       state.stats = await api('/api/stats?days=' + statsDays).catch(() => null);
       renderStats();
+    };
+
+    // ─── Receipts Tab & Editor ──────────────────────────────────
+    function receiptEffectiveTotal(r) {
+      if (r.total_amount !== null && r.total_amount !== undefined && r.total_amount !== '') {
+        return Number(r.total_amount) || 0;
+      }
+      return (r.items || []).reduce((sum, it) => {
+        const line = it.total_price !== null && it.total_price !== undefined
+          ? Number(it.total_price)
+          : (Number(it.quantity || 1) * Number(it.unit_price || 0));
+        return sum + (Number.isFinite(line) ? line : 0);
+      }, 0);
+    }
+
+    function renderReceipts() {
+      const listEl = document.getElementById('receiptsList');
+      const filterEl = document.getElementById('receiptStoreFilter');
+      const chipsEl = document.getElementById('receiptStoreChips');
+      const sumEl = document.getElementById('receiptsTotalSummary');
+      const dlEl = document.getElementById('storeNameSuggestions');
+      if (!listEl || !filterEl) return;
+
+      const allReceipts = state.receipts || [];
+      const storeTotals = new Map();
+      for (const r of allReceipts) {
+        const sName = (r.store_name || '').trim() || 'Unknown Store';
+        const cur = storeTotals.get(sName) || { count: 0, total: 0 };
+        cur.count += 1;
+        cur.total += receiptEffectiveTotal(r);
+        storeTotals.set(sName, cur);
+      }
+
+      const storeNames = [...storeTotals.keys()].sort((a, b) => a.localeCompare(b));
+      const prevStore = filterEl.value || 'all';
+      filterEl.innerHTML = '<option value="all">All Stores (' + allReceipts.length + ')</option>' +
+        storeNames.map((s) => '<option value="' + escapeAttr(s) + '">' + escapeHtml(s) + ' (' + storeTotals.get(s).count + ')</option>').join('');
+      if ([...filterEl.options].some((o) => o.value === prevStore)) filterEl.value = prevStore;
+
+      if (dlEl) {
+        dlEl.innerHTML = storeNames.filter((s) => s !== 'Unknown Store').map((s) => '<option value="' + escapeAttr(s) + '"></option>').join('');
+      }
+
+      if (chipsEl) {
+        chipsEl.innerHTML = storeNames.length
+          ? [...storeTotals.entries()]
+              .sort((a, b) => b[1].total - a[1].total)
+              .map(([name, info]) => {
+                const active = filterEl.value === name;
+                return \`<button class="sm \${active ? 'active' : ''}" type="button" onclick="selectReceiptStore('\${escapeAttr(name)}')">\${escapeHtml(name)}: $\${info.total.toFixed(2)} (\${info.count})</button>\`;
+              })
+              .join('')
+          : '';
+      }
+
+      const activeStore = filterEl.value || 'all';
+      const sortBy = (document.getElementById('receiptSortBy')?.value) || 'date_desc';
+      let rows = allReceipts.filter((r) => {
+        if (activeStore === 'all') return true;
+        return ((r.store_name || '').trim() || 'Unknown Store') === activeStore;
+      });
+
+      rows.sort((a, b) => {
+        if (sortBy === 'date_asc') return String(a.purchase_date || '').localeCompare(String(b.purchase_date || ''));
+        if (sortBy === 'total_desc') return receiptEffectiveTotal(b) - receiptEffectiveTotal(a);
+        if (sortBy === 'total_asc') return receiptEffectiveTotal(a) - receiptEffectiveTotal(b);
+        if (sortBy === 'store_asc') return String(a.store_name || '').localeCompare(String(b.store_name || ''));
+        return String(b.purchase_date || '').localeCompare(String(a.purchase_date || '')) || (b.id - a.id);
+      });
+
+      const grandTotal = rows.reduce((sum, r) => sum + receiptEffectiveTotal(r), 0);
+      if (sumEl) {
+        sumEl.textContent = rows.length + ' receipt' + (rows.length === 1 ? '' : 's') + ' · Total spent: $' + grandTotal.toFixed(2);
+      }
+
+      if (rows.length === 0) {
+        listEl.innerHTML = '<div class="card muted">No receipts saved yet. Scan a receipt on mobile or upload one above.</div>';
+        return;
+      }
+
+      listEl.innerHTML = rows.map((r) => {
+        const tot = receiptEffectiveTotal(r);
+        const items = r.items || [];
+        const linkedCount = items.filter((i) => i.matched_product_id).length;
+        const itemsHtml = items.map((it) => \`
+          <div class="mini-list-row" style="margin-bottom:4px;">
+            <div>
+              <strong>\${escapeHtml(it.raw_name)}</strong>
+              <span class="muted"> · Qty \${it.quantity}\${it.unit_price !== null && it.unit_price !== undefined ? ' · $' + Number(it.unit_price).toFixed(2) + ' ea' : ''}</span>
+              \${it.matched_product_name ? '<span class="tag" style="margin-left:6px;background:var(--primary-soft);color:var(--primary);">→ ' + escapeHtml(it.matched_product_name) + '</span>' : '<span class="tag warn" style="margin-left:6px;">Unlinked</span>'}
+            </div>
+            <strong>\${it.total_price !== null && it.total_price !== undefined ? '$' + Number(it.total_price).toFixed(2) : (it.unit_price !== null && it.unit_price !== undefined ? '$' + (Number(it.unit_price) * Number(it.quantity || 1)).toFixed(2) : '—')}</strong>
+          </div>\`).join('');
+        return \`
+          <div class="card">
+            <div class="between" style="margin-bottom:10px;">
+              <div class="row" style="gap:10px;">
+                \${r.photo_file_name ? \`<img class="thumb-sm" src="\${photoUrl(r.photo_file_name, true)}" title="View receipt photo" onclick="openPhoto('\${escapeAttr(r.photo_file_name)}', '\${escapeAttr((r.store_name || 'Receipt') + ' · ' + r.purchase_date)}', 'receipt', \${r.id})" />\` : ''}
+                <div>
+                  <a href="/receipts/\${r.id}" onclick="event.preventDefault();openReceiptModal(\${r.id})" style="color:var(--text);text-decoration:none;"><strong style="font-size:16px;">\${escapeHtml(r.store_name || 'Unknown Store')}</strong></a>
+                  <div class="muted">\${escapeHtml(r.purchase_date || '')} · \${items.length} item\${items.length === 1 ? '' : 's'} (\${linkedCount} linked)</div>
+                </div>
+              </div>
+              <div class="row" style="gap:8px;">
+                <strong style="font-size:17px;">$\${tot.toFixed(2)}</strong>
+                <button class="sm" type="button" onclick="openReceiptModal(\${r.id})">Edit</button>
+                <button class="danger sm" type="button" onclick="deleteReceiptById(\${r.id})">Delete</button>
+              </div>
+            </div>
+            <div>\${itemsHtml || '<div class="muted">No line items.</div>'}</div>
+          </div>\`;
+      }).join('');
+    }
+
+    window.selectReceiptStore = (storeName) => {
+      const sel = document.getElementById('receiptStoreFilter');
+      if (!sel) return;
+      sel.value = sel.value === storeName ? 'all' : storeName;
+      renderReceipts();
+    };
+    document.getElementById('receiptStoreFilter').onchange = renderReceipts;
+    document.getElementById('receiptSortBy').onchange = renderReceipts;
+    document.getElementById('refreshReceiptsBtn').onclick = () => loadAll();
+
+    function renderReceiptItemsEditor() {
+      const wrap = document.getElementById('recItemsEditor');
+      if (!wrap) return;
+      const prodOpts = '<option value="">(Unlinked)</option>' +
+        [...state.products].sort((a, b) => a.name.localeCompare(b.name))
+          .map((p) => '<option value="' + p.id + '">' + escapeHtml(p.name) + '</option>').join('');
+      if (editingReceiptItems.length === 0) {
+        wrap.innerHTML = '<div class="muted" style="font-size:12px;">No line items yet. Click + Add Line above.</div>';
+        return;
+      }
+      wrap.innerHTML = editingReceiptItems.map((it, idx) => \`
+        <div class="row" style="gap:6px;padding:8px;border:1px solid var(--border);border-radius:9px;background:var(--bg);">
+          <input value="\${escapeAttr(it.raw_name)}" placeholder="Item name" style="flex:1.8;min-width:140px;min-height:34px;" oninput="updateRecLine(\${idx}, 'raw_name', this.value)" />
+          <input type="number" step="0.25" min="0.01" value="\${escapeAttr(it.quantity)}" placeholder="Qty" style="width:68px;min-height:34px;" oninput="updateRecLine(\${idx}, 'quantity', this.value)" />
+          <input type="number" step="0.01" min="0" value="\${escapeAttr(it.unit_price)}" placeholder="$ ea" style="width:84px;min-height:34px;" oninput="updateRecLine(\${idx}, 'unit_price', this.value)" />
+          <select style="flex:1.2;min-width:130px;min-height:34px;" onchange="updateRecLine(\${idx}, 'matched_product_id', this.value)">\${prodOpts}</select>
+          <button class="danger sm" type="button" style="min-height:34px;padding:4px 9px;" onclick="removeRecLine(\${idx})">&times;</button>
+        </div>\`).join('');
+      wrap.querySelectorAll('select').forEach((sel, idx) => {
+        const val = editingReceiptItems[idx]?.matched_product_id;
+        sel.value = val ? String(val) : '';
+      });
+    }
+
+    window.updateRecLine = (idx, field, val) => {
+      if (!editingReceiptItems[idx]) return;
+      editingReceiptItems[idx][field] = val;
+    };
+    window.removeRecLine = (idx) => {
+      editingReceiptItems.splice(idx, 1);
+      renderReceiptItemsEditor();
+    };
+    document.getElementById('recAddLineBtn').onclick = () => {
+      editingReceiptItems.push({ id: null, raw_name: '', quantity: '1', unit_price: '', matched_product_id: '' });
+      renderReceiptItemsEditor();
+    };
+    document.getElementById('recSumTotalBtn').onclick = () => {
+      const sum = editingReceiptItems.reduce((acc, it) => acc + (Number(it.quantity || 1) * Number(it.unit_price || 0)), 0);
+      document.getElementById('recTotalInput').value = sum.toFixed(2);
+    };
+
+    window.closeReceiptModal = (updateUrl = true) => {
+      document.getElementById('receiptModal').classList.remove('open');
+      if (updateUrl && /^\/receipts\/\d+/.test(window.location.pathname)) {
+        history.replaceState(null, '', '/receipts');
+      }
+    };
+    window.openReceiptModal = (receiptId, pushUrl = true) => {
+      const r = (state.receipts || []).find((x) => x.id === receiptId);
+      if (!r) return;
+      editingReceiptId = r.id;
+      editingReceiptPhoto = r.photo_file_name || null;
+      editingReceiptOcr = r.raw_ocr_text || '';
+      if (pushUrl && window.location.pathname !== '/receipts/' + r.id) {
+        history.pushState(null, '', '/receipts/' + r.id);
+      }
+      document.getElementById('receiptModalTitle').textContent = 'Edit Receipt #' + r.id;
+      document.getElementById('recStoreInput').value = r.store_name || '';
+      document.getElementById('recDateInput').value = (r.purchase_date || '').slice(0, 10);
+      document.getElementById('recTotalInput').value = r.total_amount !== null && r.total_amount !== undefined ? String(r.total_amount) : '';
+      editingReceiptItems = (r.items || []).map((it) => ({
+        id: it.id,
+        raw_name: it.raw_name || '',
+        quantity: String(it.quantity ?? 1),
+        unit_price: it.unit_price !== null && it.unit_price !== undefined ? String(it.unit_price) : '',
+        matched_product_id: it.matched_product_id ? String(it.matched_product_id) : '',
+      }));
+      const pWrap = document.getElementById('recPhotoPreviewWrap');
+      if (r.photo_file_name) {
+        pWrap.className = '';
+        pWrap.innerHTML = '<button class="sm" type="button" onclick="openPhoto(\'' + escapeAttr(r.photo_file_name) + '\', \'Receipt Photo\', \'receipt\', ' + r.id + ')">View Receipt Photo</button>';
+      } else {
+        pWrap.className = 'hidden';
+      }
+      document.getElementById('recDeleteBtn').classList.remove('hidden');
+      document.getElementById('recModalErr').className = 'hidden';
+      renderReceiptItemsEditor();
+      document.getElementById('receiptModal').classList.add('open');
+    };
+
+    document.getElementById('newManualReceiptBtn').onclick = () => {
+      editingReceiptId = null;
+      editingReceiptPhoto = null;
+      editingReceiptOcr = '';
+      document.getElementById('receiptModalTitle').textContent = 'New Receipt';
+      document.getElementById('recStoreInput').value = '';
+      document.getElementById('recDateInput').value = new Date().toISOString().slice(0, 10);
+      document.getElementById('recTotalInput').value = '';
+      editingReceiptItems = [{ id: null, raw_name: '', quantity: '1', unit_price: '', matched_product_id: '' }];
+      document.getElementById('recPhotoPreviewWrap').className = 'hidden';
+      document.getElementById('recDeleteBtn').classList.add('hidden');
+      document.getElementById('recModalErr').className = 'hidden';
+      renderReceiptItemsEditor();
+      document.getElementById('receiptModal').classList.add('open');
+    };
+
+    document.getElementById('uploadReceiptFile').onchange = async (e) => {
+      const file = e.target.files && e.target.files[0];
+      e.target.value = '';
+      if (!file) return;
+      const stEl = document.getElementById('receiptOcrStatus');
+      stEl.className = 'notice';
+      stEl.textContent = 'Scanning receipt image with OCR... please wait.';
+      try {
+        const { blob, type } = await compressImageFile(file);
+        const base64 = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || '').split(',')[1] || '');
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+        });
+        const res = await api('/api/receipts/ocr', {
+          method: 'POST',
+          body: JSON.stringify({ data_base64: base64, mime_type: type }),
+        });
+        stEl.className = 'hidden';
+        editingReceiptId = null;
+        editingReceiptPhoto = res.photo_file_name || null;
+        editingReceiptOcr = res.raw_ocr_text || '';
+        document.getElementById('receiptModalTitle').textContent = 'Review OCR Receipt';
+        document.getElementById('recStoreInput').value = res.store_name || '';
+        document.getElementById('recDateInput').value = (res.purchase_date || new Date().toISOString().slice(0, 10)).slice(0, 10);
+        document.getElementById('recTotalInput').value = res.total_amount !== null && res.total_amount !== undefined ? String(res.total_amount) : '';
+        editingReceiptItems = (res.items || []).map((it) => ({
+          id: null,
+          raw_name: it.raw_name || '',
+          quantity: String(it.quantity ?? 1),
+          unit_price: it.unit_price !== null && it.unit_price !== undefined ? String(it.unit_price) : '',
+          matched_product_id: '',
+        }));
+        if (editingReceiptItems.length === 0) {
+          editingReceiptItems.push({ id: null, raw_name: '', quantity: '1', unit_price: '', matched_product_id: '' });
+        }
+        document.getElementById('recPhotoPreviewWrap').className = 'hidden';
+        document.getElementById('recDeleteBtn').classList.add('hidden');
+        document.getElementById('recModalErr').className = 'hidden';
+        renderReceiptItemsEditor();
+        document.getElementById('receiptModal').classList.add('open');
+      } catch (err) {
+        stEl.className = 'notice err';
+        stEl.textContent = err.message || 'OCR failed';
+      }
+    };
+
+    document.getElementById('recSaveBtn').onclick = async () => {
+      const errEl = document.getElementById('recModalErr');
+      errEl.className = 'hidden';
+      const cleanItems = editingReceiptItems
+        .filter((it) => String(it.raw_name || '').trim().length > 0)
+        .map((it) => {
+          const qty = Math.max(0.01, Number(it.quantity) || 1);
+          const up = it.unit_price !== '' && it.unit_price !== null ? Number(it.unit_price) : null;
+          const cleanUp = up !== null && Number.isFinite(up) && up >= 0 ? Math.round(up * 100) / 100 : null;
+          return {
+            ...(it.id ? { id: it.id } : {}),
+            raw_name: String(it.raw_name).trim(),
+            quantity: qty,
+            unit_price: cleanUp,
+            total_price: cleanUp !== null ? Math.round(cleanUp * qty * 100) / 100 : null,
+            matched_product_id: it.matched_product_id ? Number(it.matched_product_id) : null,
+          };
+        });
+      const totalVal = document.getElementById('recTotalInput').value.trim();
+      const payload = {
+        store_name: document.getElementById('recStoreInput').value.trim(),
+        purchase_date: document.getElementById('recDateInput').value || new Date().toISOString().slice(0, 10),
+        total_amount: totalVal ? Number(totalVal) : null,
+        photo_file_name: editingReceiptPhoto,
+        raw_ocr_text: editingReceiptOcr,
+        items: cleanItems,
+      };
+      try {
+        if (editingReceiptId) {
+          await api('/api/receipts/' + editingReceiptId, { method: 'PUT', body: JSON.stringify(payload) });
+        } else {
+          await api('/api/receipts', { method: 'POST', body: JSON.stringify(payload) });
+        }
+        closeReceiptModal();
+        await loadAll();
+      } catch (err) {
+        errEl.className = 'notice err';
+        errEl.textContent = err.message || 'Could not save receipt';
+      }
+    };
+
+    window.deleteReceiptById = async (id) => {
+      if (!confirm('Delete this receipt and its recorded receipt price history entries?')) return;
+      await api('/api/receipts/' + id, { method: 'DELETE' });
+      closeReceiptModal();
+      await loadAll();
+    };
+    document.getElementById('recDeleteBtn').onclick = () => {
+      if (editingReceiptId) window.deleteReceiptById(editingReceiptId);
     };
     document.getElementById('saveAlertsBtn').onclick = async () => {
       const stEl = document.getElementById('alertsStatus');
@@ -1942,15 +2356,24 @@ export function renderWebUiHtml(): string {
       document.getElementById('loginView').classList.remove('hidden');
     };
 
-    function switchTab(tabName) {
+    function switchTab(tabName, pushUrl = true) {
       document.querySelectorAll('#navTabs button[data-tab]').forEach((b) => {
         b.classList.toggle('active', b.dataset.tab === tabName);
       });
-      ['inventory', 'stats', 'shopping', 'labels', 'locations', 'activity', 'users', 'import', 'keys'].forEach((t) => {
+      ['inventory', 'stats', 'receipts', 'shopping', 'labels', 'locations', 'activity', 'users', 'import', 'keys'].forEach((t) => {
         document.getElementById('tab-' + t).classList.toggle('hidden', t !== tabName);
       });
+      if (pushUrl) {
+        const targetPath = '/' + tabName;
+        if (window.location.pathname !== targetPath) {
+          history.pushState(null, '', targetPath);
+        }
+      }
       if (tabName === 'stats') {
         api('/api/stats?days=' + statsDays).then((s) => { state.stats = s; renderStats(); }).catch(() => {});
+      }
+      if (tabName === 'receipts') {
+        api('/api/receipts?limit=100').then((r) => { state.receipts = r; renderReceipts(); }).catch(() => {});
       }
       if (tabName === 'labels') {
         if (!document.getElementById('labelCodeInput').value.trim()) {
@@ -2305,11 +2728,40 @@ export function renderWebUiHtml(): string {
       await loadAll();
     };
 
+    function applyRouteFromUrl() {
+      const p = window.location.pathname.replace(/\/+$/, '') || '/';
+      const itemMatch = p.match(/^\/(?:item|inventory)\/(\d+)$/);
+      if (itemMatch) {
+        switchTab('inventory', false);
+        openEditModal(Number(itemMatch[1]), false);
+        return;
+      }
+      const receiptMatch = p.match(/^\/receipts\/(\d+)$/);
+      if (receiptMatch) {
+        switchTab('receipts', false);
+        openReceiptModal(Number(receiptMatch[1]), false);
+        return;
+      }
+      closeEditModal(false);
+      closeReceiptModal(false);
+      const tabMatch = p.match(/^\/(inventory|stats|receipts|shopping|labels|locations|activity|users|import|keys)$/);
+      if (tabMatch) {
+        switchTab(tabMatch[1], false);
+      } else {
+        switchTab('inventory', false);
+      }
+    }
+
+    window.addEventListener('popstate', () => {
+      if (currentUser) applyRouteFromUrl();
+    });
+
     async function showApp() {
       document.getElementById('loginView').classList.add('hidden');
       document.getElementById('appView').classList.remove('hidden');
       document.getElementById('navTabs').classList.remove('hidden');
       await loadAll();
+      applyRouteFromUrl();
     }
 
     if (apiKey) { api('/api/auth/me').then(showApp).catch(() => {}); }

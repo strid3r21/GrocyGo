@@ -2205,6 +2205,24 @@ export class InventoryService {
       last_activity: string;
     }>;
 
+    // Spend by store (from receipts within window)
+    const byStore = this.db
+      .prepare(
+        `SELECT
+           COALESCE(NULLIF(TRIM(store_name), ''), 'Unknown Store') AS store_name,
+           COUNT(*) AS receipt_count,
+           ROUND(COALESCE(SUM(COALESCE(total_amount, (SELECT SUM(COALESCE(ri.total_price, ri.quantity * COALESCE(ri.unit_price, 0))) FROM receipt_items ri WHERE ri.receipt_id = receipts.id), 0)), 0), 2) AS total_spent
+         FROM receipts
+         WHERE purchase_date >= date('now', ?)
+         GROUP BY COALESCE(NULLIF(TRIM(store_name), ''), 'Unknown Store')
+         ORDER BY total_spent DESC, store_name COLLATE NOCASE ASC`
+      )
+      .all(windowModifier) as Array<{
+      store_name: string;
+      receipt_count: number;
+      total_spent: number;
+    }>;
+
     return {
       window_days: safeDays,
       summary: {
@@ -2231,6 +2249,7 @@ export class InventoryService {
       top_consumed: topConsumed,
       by_location: byLocation,
       by_group: byGroup,
+      by_store: byStore,
       by_user: byUser,
       data_health: {
         missing_photo: Number(missingPhoto || 0),
@@ -2363,11 +2382,194 @@ export class InventoryService {
       .prepare('SELECT id, photo_file_name FROM receipts WHERE id = ?')
       .get(receiptId) as { id: number; photo_file_name: string | null } | undefined;
     if (!row) throw new Error(`Receipt #${receiptId} not found`);
+    this.db.prepare('DELETE FROM price_history WHERE receipt_id = ?').run(receiptId);
     this.db.prepare('DELETE FROM receipts WHERE id = ?').run(receiptId);
     if (row.photo_file_name) {
       this.cleanupPhotoIfUnused(row.photo_file_name);
     }
     return { deleted: true };
+  }
+
+  updateReceipt(
+    receiptId: number,
+    payload: {
+      store_name?: string;
+      purchase_date?: string;
+      total_amount?: number | null;
+      items?: Array<{
+        id?: number;
+        raw_name: string;
+        quantity?: number;
+        unit_price?: number | null;
+        total_price?: number | null;
+        matched_product_id?: number | null;
+      }>;
+    },
+    userId?: number | null
+  ) {
+    const existing = this.db.prepare('SELECT * FROM receipts WHERE id = ?').get(receiptId) as any;
+    if (!existing) throw new Error(`Receipt #${receiptId} not found`);
+
+    const nextStore =
+      payload.store_name !== undefined ? String(payload.store_name || '').trim() : existing.store_name || '';
+    const nextDate =
+      payload.purchase_date !== undefined && String(payload.purchase_date).trim()
+        ? String(payload.purchase_date).trim()
+        : existing.purchase_date || todayIso();
+    const nextTotal =
+      payload.total_amount !== undefined
+        ? payload.total_amount === null || payload.total_amount === ('' as any)
+          ? null
+          : Number.isFinite(Number(payload.total_amount))
+          ? Math.round(Number(payload.total_amount) * 100) / 100
+          : existing.total_amount
+        : existing.total_amount;
+
+    this.db
+      .prepare('UPDATE receipts SET store_name = ?, purchase_date = ?, total_amount = ? WHERE id = ?')
+      .run(nextStore, nextDate, nextTotal, receiptId);
+
+    // Propagate receipt-level store_name and purchase_date to all linked price_history rows
+    this.db
+      .prepare('UPDATE price_history SET store_name = ?, purchased_date = ? WHERE receipt_id = ?')
+      .run(nextStore, nextDate, receiptId);
+
+    if (Array.isArray(payload.items)) {
+      const existingItems = this.db
+        .prepare('SELECT * FROM receipt_items WHERE receipt_id = ?')
+        .all(receiptId) as any[];
+      const existingById = new Map<number, any>(existingItems.map((it) => [Number(it.id), it]));
+      const keptIds = new Set<number>();
+
+      const updateItemStmt = this.db.prepare(
+        `UPDATE receipt_items
+         SET raw_name = ?, quantity = ?, unit_price = ?, total_price = ?, matched_product_id = ?, stock_added = ?
+         WHERE id = ? AND receipt_id = ?`
+      );
+      const insertItemStmt = this.db.prepare(
+        `INSERT INTO receipt_items (receipt_id, raw_name, quantity, unit_price, total_price, matched_product_id, stock_added)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      );
+
+      for (const item of payload.items) {
+        const cleanName = String(item.raw_name || '').trim();
+        if (!cleanName) continue;
+        const qty = Math.max(0.01, Number(item.quantity) || 1);
+        const rawUnit =
+          item.unit_price !== undefined && item.unit_price !== null && String(item.unit_price) !== ''
+            ? Number(item.unit_price)
+            : null;
+        const unitP =
+          rawUnit !== null && Number.isFinite(rawUnit) && rawUnit >= 0
+            ? Math.round(rawUnit * 100) / 100
+            : null;
+        const rawTot =
+          item.total_price !== undefined && item.total_price !== null && String(item.total_price) !== ''
+            ? Number(item.total_price)
+            : null;
+        const totP =
+          rawTot !== null && Number.isFinite(rawTot) && rawTot >= 0
+            ? Math.round(rawTot * 100) / 100
+            : unitP !== null
+            ? Math.round(unitP * qty * 100) / 100
+            : null;
+
+        const prev = item.id ? existingById.get(Number(item.id)) : undefined;
+        const matchedProdId =
+          item.matched_product_id !== undefined
+            ? item.matched_product_id && Number(item.matched_product_id) > 0
+              ? Number(item.matched_product_id)
+              : null
+            : prev
+            ? prev.matched_product_id
+            : null;
+        const stockAdded = matchedProdId ? 1 : 0;
+
+        let itemId: number;
+        if (prev) {
+          itemId = Number(prev.id);
+          keptIds.add(itemId);
+          updateItemStmt.run(cleanName, qty, unitP, totP, matchedProdId, stockAdded, itemId, receiptId);
+
+          // Best-effort propagate corrected price/date to matching stock batch if price changed
+          if (
+            matchedProdId &&
+            unitP !== null &&
+            prev.unit_price !== null &&
+            Number(prev.unit_price) !== unitP
+          ) {
+            this.db
+              .prepare(
+                `UPDATE stock SET price = ?
+                 WHERE product_id = ? AND price = ? AND purchased_date = ?`
+              )
+              .run(unitP, matchedProdId, Number(prev.unit_price), existing.purchase_date);
+          }
+        } else {
+          const info = insertItemStmt.run(
+            receiptId,
+            cleanName,
+            qty,
+            unitP,
+            totP,
+            matchedProdId,
+            stockAdded
+          );
+          itemId = Number(info.lastInsertRowid);
+          keptIds.add(itemId);
+        }
+
+        // Sync price_history row for this receipt item
+        const existingPh = this.db
+          .prepare('SELECT id FROM price_history WHERE receipt_item_id = ? LIMIT 1')
+          .get(itemId) as { id: number } | undefined;
+
+        if (matchedProdId && unitP !== null && unitP > 0) {
+          if (existingPh) {
+            this.db
+              .prepare(
+                `UPDATE price_history
+                 SET product_id = ?, store_name = ?, unit_price = ?, quantity = ?, total_price = ?, purchased_date = ?
+                 WHERE id = ?`
+              )
+              .run(matchedProdId, nextStore, unitP, qty, totP, nextDate, existingPh.id);
+          } else {
+            this.recordPriceHistory({
+              productId: matchedProdId,
+              receiptId,
+              receiptItemId: itemId,
+              storeName: nextStore,
+              unitPrice: unitP,
+              quantity: qty,
+              totalPrice: totP,
+              purchasedDate: nextDate,
+            });
+          }
+        } else if (existingPh) {
+          this.db.prepare('DELETE FROM price_history WHERE id = ?').run(existingPh.id);
+        }
+      }
+
+      // Delete removed receipt items and their price_history rows
+      for (const oldItem of existingItems) {
+        const oid = Number(oldItem.id);
+        if (!keptIds.has(oid)) {
+          this.db.prepare('DELETE FROM price_history WHERE receipt_item_id = ?').run(oid);
+          this.db.prepare('DELETE FROM receipt_items WHERE id = ?').run(oid);
+        }
+      }
+    }
+
+    this.logActivity({
+      productId: null,
+      itemLabel: nextStore || `Receipt #${receiptId}`,
+      amount: 0,
+      transactionType: 'receipt_edit',
+      note: nextDate + (nextTotal !== null ? ` · $${nextTotal.toFixed(2)}` : ''),
+      userId,
+    });
+
+    return this.getReceipt(receiptId);
   }
 
   getUnlinkedReceiptItems(query = '', days = 30) {
