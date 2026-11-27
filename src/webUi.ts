@@ -2579,6 +2579,10 @@ export function renderWebUiHtml(): string {
       card.className = orient === '1x2' ? 'label-card-1x2' : 'label-card-2x1';
       const imgUrl = getLabelSvgUrl(code, format);
 
+      const subHtml = sub
+        ? sub.split(/\\r?\\n|\\s*\\|\\s*/).map((s) => s.trim()).filter(Boolean).map((s) => \`<div style="font-size:10.5px;color:#333;margin-top:2px;word-break:break-word;">\${escapeHtml(s)}</div>\`).join('')
+        : '';
+
       if (format === 'qr') {
         if (orient === '1x2') {
           card.innerHTML = \`
@@ -2586,7 +2590,7 @@ export function renderWebUiHtml(): string {
             <img src="\${imgUrl}" alt="QR" style="width:124px;height:124px;display:block;flex-shrink:0;" />
             <div style="text-align:center;margin-top:6px;width:100%;overflow:hidden;">
               \${title ? \`<div style="font-size:13px;font-weight:700;line-height:1.2;word-break:break-word;">\${escapeHtml(title)}</div>\` : ''}
-              \${sub ? \`<div style="font-size:10px;color:#333;margin-top:2px;">\${escapeHtml(sub)}</div>\` : ''}
+              \${subHtml}
               <div style="font-family:monospace;font-size:11px;font-weight:700;margin-top:4px;">\${escapeHtml(code)}</div>
             </div>\`;
         } else {
@@ -2596,7 +2600,7 @@ export function renderWebUiHtml(): string {
               <img src="\${imgUrl}" alt="QR" style="width:126px;height:126px;display:block;flex-shrink:0;" />
               <div style="flex:1;min-width:0;text-align:left;">
                 \${title && title.toLowerCase() !== code.toLowerCase() ? \`<div style="font-size:14px;font-weight:700;line-height:1.2;word-break:break-word;">\${escapeHtml(title)}</div>\` : ''}
-                \${sub ? \`<div style="font-size:11px;color:#333;margin-top:3px;word-break:break-word;">\${escapeHtml(sub)}</div>\` : ''}
+                \${subHtml}
                 <div style="font-family:monospace;font-size:11px;font-weight:700;margin-top:6px;">\${escapeHtml(code)}</div>
               </div>
             </div>\`;
@@ -2640,10 +2644,16 @@ export function renderWebUiHtml(): string {
       }
       const prod = state.products.find((p) => p.id === pid);
       const existingBc = state.barcodes.find((b) => b.product_id === pid);
+      const stockRow = state.stock.find((s) => s.product_id === pid);
+      const todayStr = new Date().toISOString().slice(0, 10);
       document.getElementById('labelBatchInput').value = '1';
       if (prod) {
         document.getElementById('labelTitleInput').value = prod.name;
         document.getElementById('lblItemName').value = prod.name;
+        const bbd = stockRow && stockRow.best_before_date && stockRow.best_before_date !== '2999-12-31' ? stockRow.best_before_date : '';
+        document.getElementById('labelSubInput').value = bbd
+          ? 'Added: ' + todayStr + ' | Expires: ' + bbd
+          : 'Added: ' + todayStr;
         const c = existingBc ? existingBc.barcode : generateLabelCode();
         labelBatchCodes = [c];
         document.getElementById('labelCodeInput').value = c;
@@ -2698,14 +2708,17 @@ export function renderWebUiHtml(): string {
       const pageH = orient === '1x2' ? '2in' : '1in';
       const rotate = orient !== '1x2';
 
+      const printSubHtml = sub
+        ? sub.split(/\\r?\\n|\\s*\\|\\s*/).map((s) => s.trim()).filter(Boolean).map((s) => '<div class="s">' + escapeHtml(s) + '</div>').join('')
+        : '';
       const pagesArr = [];
       for (const entry of svgs) {
         const cleanTitle = title && title.toLowerCase() !== entry.code.toLowerCase() ? title : '';
         const oneHtml = format === 'qr'
           ? (orient === '1x2'
-            ? \`<div class="lbl portrait"><div class="brand">GrocyGo</div><div class="qr-box">\${entry.svg}</div><div class="meta">\${cleanTitle ? '<div class="t">' + escapeHtml(cleanTitle) + '</div>' : ''}\${sub ? '<div class="s">' + escapeHtml(sub) + '</div>' : ''}<div class="c">\${escapeHtml(entry.code)}</div></div></div>\`
-            : \`<div class="lbl landscape"><div class="brand">GrocyGo</div><div class="qr-box">\${entry.svg}</div><div class="meta">\${cleanTitle ? '<div class="t">' + escapeHtml(cleanTitle) + '</div>' : ''}\${sub ? '<div class="s">' + escapeHtml(sub) + '</div>' : ''}<div class="c">\${escapeHtml(entry.code)}</div></div></div>\`)
-          : \`<div class="lbl bar"><div class="brand">GrocyGo</div>\${cleanTitle ? '<div class="t">' + escapeHtml(cleanTitle) + '</div>' : ''}<div class="bar-box">\${entry.svg}</div>\${sub ? '<div class="s">' + escapeHtml(sub) + '</div>' : ''}</div>\`;
+            ? \`<div class="lbl portrait"><div class="brand">GrocyGo</div><div class="qr-box">\${entry.svg}</div><div class="meta">\${cleanTitle ? '<div class="t">' + escapeHtml(cleanTitle) + '</div>' : ''}\${printSubHtml}<div class="c">\${escapeHtml(entry.code)}</div></div></div>\`
+            : \`<div class="lbl landscape"><div class="brand">GrocyGo</div><div class="qr-box">\${entry.svg}</div><div class="meta">\${cleanTitle ? '<div class="t">' + escapeHtml(cleanTitle) + '</div>' : ''}\${printSubHtml}<div class="c">\${escapeHtml(entry.code)}</div></div></div>\`)
+          : \`<div class="lbl bar"><div class="brand">GrocyGo</div>\${cleanTitle ? '<div class="t">' + escapeHtml(cleanTitle) + '</div>' : ''}<div class="bar-box">\${entry.svg}</div>\${printSubHtml}</div>\`;
         for (let k = 0; k < copies; k++) pagesArr.push('<div class="pg">' + oneHtml + '</div>');
       }
 

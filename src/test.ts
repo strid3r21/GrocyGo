@@ -1134,7 +1134,7 @@ async function runTests() {
       body: JSON.stringify({
         code: 'GG-TEST01',
         title: 'Homemade Soup',
-        subtitle: '2026-11-26',
+        subtitle: 'Added: 2026-11-26\nExpires: 2027-08-26',
         format: 'qr',
         orient: '2x1',
         copies: 2,
@@ -1147,6 +1147,8 @@ async function runTests() {
     assert.ok(dryPrint.tspl.includes('DENSITY 12'));
     assert.ok(dryPrint.tspl.includes('TEXT 336,10,"1",0,1,1,"GrocyGo"'));
     assert.ok(dryPrint.tspl.includes('QRCODE 16,18,M,8,A,0,"GG-TEST01"'));
+    assert.ok(dryPrint.tspl.includes('Added: 2026-11-26'));
+    assert.ok(dryPrint.tspl.includes('Expires: 2027-08-26'));
     assert.ok(dryPrint.tspl.includes('GG-TEST01'));
     assert.ok(dryPrint.tspl.includes('PRINT 2,1'));
 
@@ -1178,7 +1180,7 @@ async function runTests() {
       body: JSON.stringify({ amount: 1, best_before_date: '2026-12-01', note: '' }),
     });
 
-    console.log('ALL SERVER v2.3.5 TESTS PASSED!');
+    console.log('ALL SERVER v2.3.6 TESTS PASSED!');
     console.log('\nSample compact MCP inventory_summary output:\n' + summaryText);
     console.log('\nSample compact MCP search_inventory output:\n' + searchText);
   } finally {

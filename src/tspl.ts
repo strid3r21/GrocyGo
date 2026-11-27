@@ -14,6 +14,14 @@ function escapeTsplText(str: string): string {
     .trim();
 }
 
+function splitSubtitleLines(str: string): string[] {
+  return String(str || '')
+    .split(/\r?\n|\s*\|\s*/)
+    .map((part) => escapeTsplText(part))
+    .filter(Boolean)
+    .slice(0, 2);
+}
+
 function wrapLines(text: string, maxChars: number, maxLines: number): string[] {
   const words = escapeTsplText(text).split(/\s+/).filter(Boolean);
   const lines: string[] = [];
@@ -51,7 +59,7 @@ export function buildTsplLabels(opts: TsplLabelOptions): string {
   const orient = opts.orient === '1x2' ? '1x2' : '2x1';
   const copies = Math.max(1, Math.min(20, Math.round(Number(opts.copies) || 1)));
   const title = escapeTsplText(opts.title || '');
-  const subtitle = escapeTsplText(opts.subtitle || '');
+  const subtitleLines = splitSubtitleLines(opts.subtitle || '');
 
   const out: string[] = [];
   if (orient === '2x1') {
@@ -86,8 +94,12 @@ export function buildTsplLabels(opts: TsplLabelOptions): string {
         for (const tl of titleLines) {
           rows.push({ font: '3', bold: true, text: tl, h: 28 });
         }
-        if (subtitle) {
-          rows.push({ font: '2', bold: false, text: subtitle.slice(0, 16), h: 25 });
+        for (const sl of subtitleLines) {
+          if (sl.length <= 16) {
+            rows.push({ font: '2', bold: false, text: sl, h: 22 });
+          } else {
+            rows.push({ font: '1', bold: false, text: sl.slice(0, 24), h: 18 });
+          }
         }
         rows.push({
           font: code.length <= 12 ? '3' : '2',
@@ -109,8 +121,8 @@ export function buildTsplLabels(opts: TsplLabelOptions): string {
           pushBoldText(18, 14, '3', cleanTitle.slice(0, 19));
         }
         out.push(`BARCODE 22,50,"128",92,1,0,2,2,"${code}"`);
-        if (subtitle) {
-          out.push(`TEXT 18,174,"2",0,1,1,"${subtitle.slice(0, 30)}"`);
+        if (subtitleLines.length > 0) {
+          out.push(`TEXT 18,174,"1",0,1,1,"${subtitleLines.join(' | ').slice(0, 44)}"`);
         }
       }
     } else {
@@ -125,9 +137,9 @@ export function buildTsplLabels(opts: TsplLabelOptions): string {
           pushBoldText(14, y, '3', tl);
           y += 30;
         }
-        if (subtitle) {
-          out.push(`TEXT 14,${y + 4},"2",0,1,1,"${subtitle.slice(0, 15)}"`);
-          y += 28;
+        for (const sl of subtitleLines) {
+          out.push(`TEXT 14,${y + 4},"1",0,1,1,"${sl.slice(0, 22)}"`);
+          y += 18;
         }
         pushBoldText(14, y + 6, code.length <= 11 ? '3' : '2', code.slice(0, 15));
       } else {
@@ -138,8 +150,12 @@ export function buildTsplLabels(opts: TsplLabelOptions): string {
           y += 30;
         }
         out.push(`BARCODE 16,108,"128",114,1,0,2,2,"${code}"`);
-        if (subtitle) {
-          out.push(`TEXT 14,274,"2",0,1,1,"${subtitle.slice(0, 15)}"`);
+        if (subtitleLines.length > 0) {
+          let sy = 274;
+          for (const sl of subtitleLines) {
+            out.push(`TEXT 14,${sy},"1",0,1,1,"${sl.slice(0, 22)}"`);
+            sy += 18;
+          }
         }
       }
     }
