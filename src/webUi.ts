@@ -432,6 +432,7 @@ export function renderWebUiHtml(): string {
               <option value="store_asc">Sort: Store (A–Z)</option>
             </select>
             <span id="receiptsTotalSummary" class="tag" style="padding:6px 10px;font-size:13px;"></span>
+            <button id="toggleAllReceiptsBtn" class="sm" type="button">Expand All</button>
           </div>
           <div id="receiptStoreChips" class="row" style="margin-top:10px;gap:6px;"></div>
         </div>
@@ -901,6 +902,7 @@ export function renderWebUiHtml(): string {
     let editingReceiptPhoto = null;
     let editingReceiptOcr = '';
     let editingReceiptItems = [];
+    let expandedReceiptIds = new Set();
     let invViewMode = 'stock';
     let selectedIds = new Set();
     let editingProductId = null;
@@ -1842,11 +1844,19 @@ export function renderWebUiHtml(): string {
         return;
       }
 
+      const toggleAllBtn = document.getElementById('toggleAllReceiptsBtn');
+      if (toggleAllBtn) {
+        const allOpen = rows.length > 0 && rows.every((r) => expandedReceiptIds.has(r.id));
+        toggleAllBtn.textContent = allOpen ? 'Collapse All' : 'Expand All';
+      }
+
       listEl.innerHTML = rows.map((r) => {
         const tot = receiptEffectiveTotal(r);
         const items = r.items || [];
         const linkedCount = items.filter((i) => i.matched_product_id).length;
-        const itemsHtml = items.map((it) => \`
+        const isExpanded = expandedReceiptIds.has(r.id);
+        const itemsHtml = isExpanded
+          ? items.map((it) => \`
           <div class="mini-list-row" style="margin-bottom:4px;">
             <div>
               <strong>\${escapeHtml(it.raw_name)}</strong>
@@ -1854,27 +1864,45 @@ export function renderWebUiHtml(): string {
               \${it.matched_product_name ? '<span class="tag" style="margin-left:6px;background:var(--primary-soft);color:var(--primary);">→ ' + escapeHtml(it.matched_product_name) + '</span>' : '<span class="tag warn" style="margin-left:6px;">Unlinked</span>'}
             </div>
             <strong>\${it.total_price !== null && it.total_price !== undefined ? '$' + Number(it.total_price).toFixed(2) : (it.unit_price !== null && it.unit_price !== undefined ? '$' + (Number(it.unit_price) * Number(it.quantity || 1)).toFixed(2) : '—')}</strong>
-          </div>\`).join('');
+          </div>\`).join('')
+          : '';
         return \`
           <div class="card">
-            <div class="between" style="margin-bottom:10px;">
+            <div class="between" style="cursor:pointer;\${isExpanded ? 'margin-bottom:10px;' : ''}" onclick="toggleReceiptExpand(\${r.id})">
               <div class="row" style="gap:10px;">
-                \${r.photo_file_name ? \`<img class="thumb-sm" src="\${photoUrl(r.photo_file_name, true)}" title="View receipt photo" onclick="openPhoto('\${escapeAttr(r.photo_file_name)}', '\${escapeAttr((r.store_name || 'Receipt') + ' · ' + r.purchase_date)}', 'receipt', \${r.id})" />\` : ''}
+                <span style="display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:6px;background:var(--muted);color:var(--text-secondary);font-size:13px;font-weight:700;" aria-label="\${isExpanded ? 'Collapse' : 'Expand'}">\${isExpanded ? '▾' : '▸'}</span>
+                \${r.photo_file_name ? \`<img class="thumb-sm" src="\${photoUrl(r.photo_file_name, true)}" title="View receipt photo" onclick="event.stopPropagation();openPhoto('\${escapeAttr(r.photo_file_name)}', '\${escapeAttr((r.store_name || 'Receipt') + ' · ' + r.purchase_date)}', 'receipt', \${r.id})" />\` : ''}
                 <div>
-                  <a href="/receipts/\${r.id}" onclick="event.preventDefault();openReceiptModal(\${r.id})" style="color:var(--text);text-decoration:none;"><strong style="font-size:16px;">\${escapeHtml(r.store_name || 'Unknown Store')}</strong></a>
+                  <a href="/receipts/\${r.id}" onclick="event.preventDefault();event.stopPropagation();openReceiptModal(\${r.id})" style="color:var(--text);text-decoration:none;"><strong style="font-size:16px;">\${escapeHtml(r.store_name || 'Unknown Store')}</strong></a>
                   <div class="muted">\${escapeHtml(r.purchase_date || '')} · \${items.length} item\${items.length === 1 ? '' : 's'} (\${linkedCount} linked)</div>
                 </div>
               </div>
-              <div class="row" style="gap:8px;">
+              <div class="row" style="gap:8px;" onclick="event.stopPropagation()">
                 <strong style="font-size:17px;">$\${tot.toFixed(2)}</strong>
                 <button class="sm" type="button" onclick="openReceiptModal(\${r.id})">Edit</button>
                 <button class="danger sm" type="button" onclick="deleteReceiptById(\${r.id})">Delete</button>
               </div>
             </div>
-            <div>\${itemsHtml || '<div class="muted">No line items.</div>'}</div>
+            \${isExpanded ? \`<div style="padding-top:8px;border-top:1px solid var(--border);">\${itemsHtml || '<div class="muted">No line items.</div>'}</div>\` : ''}
           </div>\`;
       }).join('');
     }
+
+    window.toggleReceiptExpand = (id) => {
+      if (expandedReceiptIds.has(id)) expandedReceiptIds.delete(id);
+      else expandedReceiptIds.add(id);
+      renderReceipts();
+    };
+    document.getElementById('toggleAllReceiptsBtn').onclick = () => {
+      const allReceipts = state.receipts || [];
+      const allOpen = allReceipts.length > 0 && allReceipts.every((r) => expandedReceiptIds.has(r.id));
+      if (allOpen) {
+        expandedReceiptIds.clear();
+      } else {
+        allReceipts.forEach((r) => expandedReceiptIds.add(r.id));
+      }
+      renderReceipts();
+    };
 
     window.selectReceiptStore = (storeName) => {
       const sel = document.getElementById('receiptStoreFilter');

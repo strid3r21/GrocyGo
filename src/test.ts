@@ -1116,7 +1116,7 @@ async function runTests() {
       }
     }
 
-    console.log('ALL SERVER v2.2.1 TESTS PASSED!');
+    console.log('ALL SERVER v2.2.2 TESTS PASSED!');
     console.log('\nSample compact MCP inventory_summary output:\n' + summaryText);
     console.log('\nSample compact MCP search_inventory output:\n' + searchText);
   } finally {
