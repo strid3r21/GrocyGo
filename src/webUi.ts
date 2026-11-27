@@ -92,7 +92,7 @@ export function renderWebUiHtml(): string {
     .between { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
     .field { display: flex; flex-direction: column; gap: 5px; margin-bottom: 12px; text-align: left; }
     .field label { font-size: 13px; font-weight: 600; color: var(--text); }
-    input, select {
+    input, select, textarea {
       background: var(--bg);
       color: var(--text);
       border: 1px solid var(--border);
@@ -100,7 +100,9 @@ export function renderWebUiHtml(): string {
       padding: 8px 12px;
       min-height: 40px;
       font-size: 14px;
+      font-family: inherit;
     }
+    textarea { resize: vertical; line-height: 1.5; }
     .meta { color: var(--text-secondary); font-size: 13px; }
     .muted { color: var(--text-muted); font-size: 13px; }
     .notice {
@@ -960,8 +962,8 @@ export function renderWebUiHtml(): string {
   </div>
 
   <!-- Add / Edit Recipe Modal -->
-  <div id="recipeModal" class="modal">
-    <div class="modal-card" style="max-width:720px;max-height:90vh;overflow-y:auto;">
+  <div id="recipeModal" class="modal-backdrop" onclick="if(event.target===this)closeRecipeModal()">
+    <div class="modal-box" style="max-width:700px;">
       <div class="between" style="margin-bottom:10px;">
         <h3 style="margin:0;" id="recipeModalTitle">Add Recipe</h3>
         <button class="sm" type="button" onclick="closeRecipeModal()">Close</button>
@@ -1029,8 +1031,8 @@ export function renderWebUiHtml(): string {
   </div>
 
   <!-- Discover Open-Source Recipes (TheMealDB) Modal -->
-  <div id="discoverRecipesModal" class="modal">
-    <div class="modal-card" style="max-width:720px;max-height:90vh;overflow-y:auto;">
+  <div id="discoverRecipesModal" class="modal-backdrop" onclick="if(event.target===this)this.classList.remove('open')">
+    <div class="modal-box" style="max-width:700px;">
       <div class="between" style="margin-bottom:10px;">
         <div>
           <h3 style="margin:0;">Discover Open-Source Recipes</h3>
@@ -3074,6 +3076,26 @@ export function renderWebUiHtml(): string {
     };
 
     // ─── Recipes & Meals UI ───────────────────────────────────────
+    function renderMarkdownHtml(raw) {
+      const safe = escapeHtml(String(raw || ''));
+      const fmtInline = (s) => s
+        .replace(/\\*\\*(.+?)\\*\\*/g, '<strong>$1</strong>')
+        .replace(/\\*(.+?)\\*/g, '<em>$1</em>');
+      return safe.split(/\\r?\\n/).map((line) => {
+        const t = line.trim();
+        if (!t) return '<div style="height:8px;"></div>';
+        if (t.startsWith('### ')) return '<div style="font-weight:700;font-size:14px;margin:8px 0 4px;">' + fmtInline(t.slice(4)) + '</div>';
+        if (t.startsWith('## ')) return '<div style="font-weight:700;font-size:15px;margin:10px 0 4px;">' + fmtInline(t.slice(3)) + '</div>';
+        if (t.startsWith('# ')) return '<div style="font-weight:700;font-size:16px;margin:10px 0 4px;">' + fmtInline(t.slice(2)) + '</div>';
+        if (/^[-*]\\s+/.test(t)) return '<div style="padding-left:14px;margin:3px 0;">&bull; ' + fmtInline(t.replace(/^[-*]\\s+/, '')) + '</div>';
+        if (/^\\d+[.)]\\s+/.test(t)) return '<div style="padding-left:8px;margin:4px 0;">' + fmtInline(t) + '</div>';
+        return '<div style="margin:4px 0;">' + fmtInline(t) + '</div>';
+      }).join('');
+    }
+
+    let addedShopIngIds = new Set();
+    let addedAllRecipeIds = new Set();
+
     function renderRecipes() {
       const listEl = document.getElementById('recipesList');
       if (!listEl) return;
@@ -3106,15 +3128,18 @@ export function renderWebUiHtml(): string {
         if (r.cook_minutes) timeParts.push('Cook ' + r.cook_minutes + 'm');
         const ingHtml = (r.ingredients || []).map((ing) => {
           const amtTxt = (ing.amount ? ing.amount + (ing.unit ? ' ' + ing.unit : '') + ' ' : '') + escapeHtml(ing.ingredient_name);
+          const isAdded = addedShopIngIds.has(ing.id);
+          const shopBtn = '<button type="button" class="sm' + (isAdded ? ' active' : '') + '" onclick="addRecipeIngToShop(' + r.id + ',' + ing.id + ')">' + (isAdded ? '&#10003; Added' : '+ Shop') + '</button>';
           if (ing.in_stock) {
             const stCls = ing.due_status === 'overdue' ? 'err' : (ing.due_status === 'soon' || ing.due_status === 'opened' ? 'warn' : 'ok');
-            const stLbl = ing.due_status === 'overdue' ? 'Overdue' : ing.due_status === 'soon' ? 'Due soon' : ing.due_status === 'opened' ? 'Opened' : 'In stock';
-            return '<div class="between" style="padding:4px 0;border-bottom:1px solid var(--border);font-size:13px;"><span>&#10003; ' + amtTxt + (ing.note ? ' <span class="muted">(' + escapeHtml(ing.note) + ')</span>' : '') + '</span><span class="tag ' + stCls + '">' + stLbl + ' (' + ing.stock_amount + ')</span></div>';
+            const stLbl = ing.due_status === 'overdue' ? 'Overdue' : ing.due_status === 'soon' ? 'Due soon' : ing.due_status === 'opened' ? 'Opened' : 'Have';
+            return '<div class="between" style="padding:4px 0;border-bottom:1px solid var(--border);font-size:13px;"><span>&#10003; ' + amtTxt + (ing.note ? ' <span class="muted">(' + escapeHtml(ing.note) + ')</span>' : '') + '</span><div class="row" style="gap:6px;"><span class="tag ' + stCls + '">' + stLbl + ' (' + ing.stock_amount + ')</span>' + shopBtn + '</div></div>';
           }
-          return '<div class="between" style="padding:4px 0;border-bottom:1px solid var(--border);font-size:13px;"><span class="muted">' + amtTxt + (ing.optional ? ' (optional)' : '') + '</span><button type="button" class="sm" onclick="addRecipeIngToShop(' + r.id + ',' + ing.id + ')">+ Shop</button></div>';
+          return '<div class="between" style="padding:4px 0;border-bottom:1px solid var(--border);font-size:13px;"><span class="muted">' + amtTxt + (ing.optional ? ' (optional)' : '') + '</span>' + shopBtn + '</div>';
         }).join('');
+        const allAdded = addedAllRecipeIds.has(r.id);
         const addAllBtn = r.missing_count > 0
-          ? '<button type="button" class="sm primary" onclick="addAllMissingRecipeToShop(' + r.id + ')">+ Add ' + r.missing_count + ' Missing to Shop</button>'
+          ? '<button type="button" class="sm ' + (allAdded ? 'active' : 'primary') + '" onclick="addAllMissingRecipeToShop(' + r.id + ')">' + (allAdded ? '&#10003; Added to Shopping List' : '+ Add ' + r.missing_count + ' Missing to Shop') + '</button>'
           : '';
         return '<div class="card" style="padding:14px;">' +
           '<div class="row" style="gap:12px;align-items:flex-start;">' + imgHtml +
@@ -3124,7 +3149,7 @@ export function renderWebUiHtml(): string {
           (timeParts.length ? '<div class="muted" style="font-size:12px;margin-top:4px;">' + timeParts.join(' · ') + (r.tags ? ' · ' + escapeHtml(r.tags) : '') + '</div>' : '') +
           '</div></div>' +
           (ingHtml ? '<div style="margin-top:10px;">' + ingHtml + '</div>' : '') +
-          (r.instructions ? '<details style="margin-top:10px;"><summary style="cursor:pointer;font-size:13px;font-weight:600;color:var(--primary);">Instructions</summary><div style="white-space:pre-wrap;font-size:13px;margin-top:6px;line-height:1.5;">' + escapeHtml(r.instructions) + '</div></details>' : '') +
+          (r.instructions ? '<details style="margin-top:10px;"><summary style="cursor:pointer;font-size:13px;font-weight:600;color:var(--primary);">Instructions</summary><div style="font-size:13.5px;margin-top:6px;line-height:1.55;">' + renderMarkdownHtml(r.instructions) + '</div></details>' : '') +
           '<div class="row" style="gap:8px;margin-top:12px;justify-content:flex-end;flex-wrap:wrap;">' +
           addAllBtn +
           '<button type="button" class="sm" onclick="openRecipeModal(' + r.id + ')">Edit</button>' +
@@ -3139,6 +3164,7 @@ export function renderWebUiHtml(): string {
           method: 'POST',
           body: JSON.stringify({ ingredient_ids: [ingId] }),
         });
+        addedShopIngIds.add(ingId);
         const st = document.getElementById('recipesStatus');
         st.className = 'notice';
         st.textContent = res.added > 0 ? 'Added to shopping list: ' + res.items.join(', ') : 'Already on shopping list.';
@@ -3154,6 +3180,7 @@ export function renderWebUiHtml(): string {
           method: 'POST',
           body: JSON.stringify({}),
         });
+        addedAllRecipeIds.add(recipeId);
         const st = document.getElementById('recipesStatus');
         st.className = 'notice';
         st.textContent = res.added > 0 ? 'Added ' + res.added + ' missing item(s) to shopping list: ' + res.items.join(', ') : 'All missing ingredients are already on your shopping list.';

@@ -1273,7 +1273,7 @@ async function runTests() {
     const recipesAfter = await fetch(`${base}/api/recipes`, { headers }).then((r) => r.json());
     assert.equal(recipesAfter.length, 0);
 
-    console.log('ALL SERVER v2.4.0 TESTS PASSED!');
+    console.log('ALL SERVER v2.4.1 TESTS PASSED!');
     console.log('\nSample compact MCP inventory_summary output:\n' + summaryText);
     console.log('\nSample compact MCP search_inventory output:\n' + searchText);
   } finally {
