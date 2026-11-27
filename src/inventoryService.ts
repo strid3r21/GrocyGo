@@ -1694,7 +1694,23 @@ export class InventoryService {
          LEFT JOIN users uc ON uc.id = sl.completed_by_user_id
          ORDER BY sl.done ASC, sl.id DESC`;
 
-    return listId ? this.db.prepare(sql).all(listId) : this.db.prepare(sql).all();
+    const rows = (listId ? this.db.prepare(sql).all(listId) : this.db.prepare(sql).all()) as any[];
+    return rows.map((r) => ({
+      ...r,
+      recipe_names: this.parseRecipeNames(r.recipe_names),
+    }));
+  }
+
+  private parseRecipeNames(raw: unknown): string[] {
+    if (Array.isArray(raw)) return raw.map((s) => String(s).trim()).filter(Boolean);
+    if (typeof raw !== 'string' || !raw.trim()) return [];
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed.map((s) => String(s).trim()).filter(Boolean);
+    } catch {
+      return raw.split(',').map((s) => s.trim()).filter(Boolean);
+    }
+    return [];
   }
 
   addMissingProductsToShoppingList(listId = 1, userId?: number | null): { added: number } {
@@ -2987,6 +3003,33 @@ export class InventoryService {
       ingsByRecipe.set(ing.recipe_id, arr);
     }
 
+    const openShoppingRows = this.db
+      .prepare('SELECT id, product_id, note, amount, recipe_names FROM shopping_list WHERE done = 0')
+      .all() as Array<{
+        id: number;
+        product_id: number | null;
+        note: string | null;
+        amount: number;
+        recipe_names: string | null;
+      }>;
+    const shopByProductId = new Map<number, { amount: number; recipes: string[] }>();
+    const shopByLowerName = new Map<string, { amount: number; recipes: string[] }>();
+    for (const sr of openShoppingRows) {
+      const recNames = this.parseRecipeNames(sr.recipe_names);
+      const entry = { amount: Number(sr.amount || 0), recipes: recNames };
+      if (sr.product_id) {
+        shopByProductId.set(Number(sr.product_id), entry);
+      }
+      const cleanNote = String(sr.note || '')
+        .split(' — ')[0]
+        .replace(/\s*\([^)]*\)\s*$/, '')
+        .trim()
+        .toLowerCase();
+      if (cleanNote) {
+        shopByLowerName.set(cleanNote, entry);
+      }
+    }
+
     return recipeRows.map((r) => {
       const rawIngs = ingsByRecipe.get(r.id) || [];
       let inStockCount = 0;
@@ -3043,13 +3086,25 @@ export class InventoryService {
           missingCount++;
         }
 
+        const displayIngName = String(ing.ingredient_name || linkedProd?.name || '');
+        const shopMatch =
+          (linkedProd ? shopByProductId.get(linkedProd.id) : undefined) ||
+          shopByLowerName.get(displayIngName.trim().toLowerCase());
+        const inShoppingList = Boolean(shopMatch);
+        const inShoppingListForRecipe = Boolean(
+          shopMatch &&
+            shopMatch.recipes.some(
+              (rn) => rn.toLowerCase() === String(r.name || '').trim().toLowerCase()
+            )
+        );
+
         return {
           id: Number(ing.id),
           recipe_id: Number(ing.recipe_id),
           product_id: linkedProd ? linkedProd.id : null,
           product_name: linkedProd ? linkedProd.name : null,
           auto_matched: autoMatched,
-          ingredient_name: String(ing.ingredient_name || linkedProd?.name || ''),
+          ingredient_name: displayIngName,
           amount: Number(ing.amount || 1),
           unit: String(ing.unit || ''),
           note: String(ing.note || ''),
@@ -3058,6 +3113,9 @@ export class InventoryService {
           stock_amount: stockAmount,
           best_before_date: bestBefore,
           due_status: dueStatus,
+          in_shopping_list: inShoppingList,
+          in_shopping_list_for_recipe: inShoppingListForRecipe,
+          shopping_list_amount: shopMatch ? shopMatch.amount : 0,
         };
       });
 
@@ -3391,39 +3449,83 @@ export class InventoryService {
     if (!recipe) throw new Error(`Recipe #${recipeId} not found`);
 
     const openShopping = this.db
-      .prepare('SELECT product_id, LOWER(COALESCE(note, \'\')) AS note_lower FROM shopping_list WHERE done = 0')
-      .all() as Array<{ product_id: number | null; note_lower: string }>;
-    const openProdIds = new Set(openShopping.map((s) => s.product_id).filter(Boolean));
-    const openNotes = new Set(openShopping.map((s) => s.note_lower).filter(Boolean));
+      .prepare('SELECT id, product_id, note, amount, recipe_names FROM shopping_list WHERE done = 0')
+      .all() as Array<{
+        id: number;
+        product_id: number | null;
+        note: string | null;
+        amount: number;
+        recipe_names: string | null;
+      }>;
 
-    const targets =
-      Array.isArray(ingredientIds) && ingredientIds.length > 0
-        ? recipe.ingredients.filter((i) => ingredientIds.includes(i.id))
-        : recipe.ingredients.filter((i) => !i.in_stock && !i.optional);
+    const isExplicitSelection = Array.isArray(ingredientIds) && ingredientIds.length > 0;
+    const targets = isExplicitSelection
+      ? recipe.ingredients.filter((i) => ingredientIds!.includes(i.id))
+      : recipe.ingredients.filter((i) => !i.in_stock && !i.optional && !i.in_shopping_list_for_recipe);
 
     const addedItems: string[] = [];
     for (const ing of targets) {
-      if (ing.product_id && openProdIds.has(ing.product_id)) continue;
-      const displayLabel = ing.product_name || ing.ingredient_name;
-      const customNote = ing.product_id
-        ? `For ${recipe.name}${ing.unit ? ` (${ing.amount} ${ing.unit})` : ''}`
-        : `${displayLabel}${ing.unit ? ` (${ing.amount} ${ing.unit})` : ''} — ${recipe.name}`;
-      if (!ing.product_id && openNotes.has(customNote.toLowerCase())) continue;
+      const displayLabel = (ing.product_name || ing.ingredient_name).trim();
+      if (!displayLabel) continue;
+      const lowerLabel = displayLabel.toLowerCase();
+      const addQty = Math.max(1, Math.ceil(ing.amount || 1));
 
-      this.db
-        .prepare(
-          `INSERT INTO shopping_list (product_id, note, amount, shopping_list_id, done, added_by_user_id)
-           VALUES (?, ?, ?, 1, 0, ?)`
-        )
-        .run(ing.product_id || null, customNote, Math.max(1, Math.ceil(ing.amount || 1)), userId ?? null);
+      const existing = openShopping.find((s) => {
+        if (ing.product_id && s.product_id && Number(s.product_id) === Number(ing.product_id)) {
+          return true;
+        }
+        const cleanNote = String(s.note || '')
+          .split(' — ')[0]
+          .replace(/\s*\([^)]*\)\s*$/, '')
+          .trim()
+          .toLowerCase();
+        return Boolean(cleanNote && cleanNote === lowerLabel);
+      });
 
-      if (ing.product_id) openProdIds.add(ing.product_id);
-      else openNotes.add(customNote.toLowerCase());
+      if (existing) {
+        const currentRecipes = this.parseRecipeNames(existing.recipe_names);
+        const alreadyHasThisRecipe = currentRecipes.some(
+          (rn) => rn.toLowerCase() === recipe.name.toLowerCase()
+        );
+        if (!isExplicitSelection && alreadyHasThisRecipe) {
+          continue;
+        }
+        const nextRecipes = alreadyHasThisRecipe
+          ? currentRecipes
+          : [...currentRecipes, recipe.name];
+        const nextAmount = Math.round((Number(existing.amount || 0) + addQty) * 100) / 100;
+        const cleanExistingNote = existing.product_id ? '' : displayLabel;
+
+        this.db
+          .prepare('UPDATE shopping_list SET amount = ?, note = ?, recipe_names = ? WHERE id = ?')
+          .run(nextAmount, cleanExistingNote, JSON.stringify(nextRecipes), existing.id);
+
+        existing.amount = nextAmount;
+        existing.note = cleanExistingNote;
+        existing.recipe_names = JSON.stringify(nextRecipes);
+      } else {
+        const cleanNote = ing.product_id ? '' : displayLabel;
+        const nextRecipesJson = JSON.stringify([recipe.name]);
+        const info = this.db
+          .prepare(
+            `INSERT INTO shopping_list (product_id, note, amount, shopping_list_id, done, added_by_user_id, recipe_names)
+             VALUES (?, ?, ?, 1, 0, ?, ?)`
+          )
+          .run(ing.product_id || null, cleanNote, addQty, userId ?? null, nextRecipesJson);
+
+        openShopping.push({
+          id: Number(info.lastInsertRowid),
+          product_id: ing.product_id || null,
+          note: cleanNote,
+          amount: addQty,
+          recipe_names: nextRecipesJson,
+        });
+      }
 
       this.logActivity({
         productId: ing.product_id || null,
         itemLabel: displayLabel,
-        amount: Math.max(1, Math.ceil(ing.amount || 1)),
+        amount: addQty,
         transactionType: 'shopping_add',
         note: `Recipe: ${recipe.name}`,
         userId,

@@ -1243,6 +1243,33 @@ async function runTests() {
     assert.equal(shopAddRec.added, 1);
     assert.equal(shopAddRec.items[0], 'Crushed Tomatoes');
 
+    // Verify recipe now reports ingredient as already in shopping list for this recipe
+    const recAfterShop = await fetch(`${base}/api/recipes/${recId}`, { headers }).then((r) => r.json());
+    const tomIng = recAfterShop.ingredients.find((i: any) => i.ingredient_name === 'Crushed Tomatoes');
+    assert.equal(tomIng.in_shopping_list, true);
+    assert.equal(tomIng.in_shopping_list_for_recipe, true);
+
+    // Create a second recipe sharing "Crushed Tomatoes" -> adding combines qty & appends recipe_names
+    const rec2 = await fetch(`${base}/api/recipes`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        name: 'Marinara Pasta',
+        ingredients: [{ ingredient_name: 'Crushed Tomatoes', amount: 1, unit: 'can' }],
+      }),
+    }).then((r) => r.json());
+    await fetch(`${base}/api/recipes/${rec2.id}/add-missing-to-shopping`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({}),
+    });
+    const shopListRows = await fetch(`${base}/api/objects/shopping_list`, { headers }).then((r) => r.json());
+    const tomShopRows = shopListRows.filter((s: any) => s.note === 'Crushed Tomatoes');
+    assert.equal(tomShopRows.length, 1);
+    assert.equal(Number(tomShopRows[0].amount), 3);
+    assert.deepEqual(tomShopRows[0].recipe_names, ['Creamy Tomato Soup', 'Marinara Pasta']);
+    await fetch(`${base}/api/recipes/${rec2.id}`, { method: 'DELETE', headers });
+
     const mcpUpdateRec = await fetch(`${base}/mcp`, {
       method: 'POST',
       headers,
@@ -1273,7 +1300,7 @@ async function runTests() {
     const recipesAfter = await fetch(`${base}/api/recipes`, { headers }).then((r) => r.json());
     assert.equal(recipesAfter.length, 0);
 
-    console.log('ALL SERVER v2.4.1 TESTS PASSED!');
+    console.log('ALL SERVER v2.4.2 TESTS PASSED!');
     console.log('\nSample compact MCP inventory_summary output:\n' + summaryText);
     console.log('\nSample compact MCP search_inventory output:\n' + searchText);
   } finally {
