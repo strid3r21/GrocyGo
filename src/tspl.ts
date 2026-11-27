@@ -55,20 +55,20 @@ export function buildTsplLabels(opts: TsplLabelOptions): string {
 
   const out: string[] = [];
   if (orient === '2x1') {
-    out.push('SIZE 2,1');
+    out.push('SIZE 50 mm,25 mm');
   } else {
-    out.push('SIZE 1,2');
+    out.push('SIZE 25 mm,50 mm');
   }
-  out.push('GAP 0.12,0');
+  out.push('GAP 3 mm,0');
   out.push('DIRECTION 1');
-  out.push('DENSITY 8');
+  out.push('DENSITY 12');
 
   for (const code of cleanCodes) {
     out.push('CLS');
     if (orient === '2x1') {
       if (format === 'qr') {
-        // Left QR code (roughly 140x140 dots), right title + subtitle + code
-        out.push(`QRCODE 16,24,M,5,A,0,"${code}"`);
+        // Left QR code, right title + subtitle + code
+        out.push(`QRCODE 16,24,M,4,A,0,"${code}"`);
         const titleLines = wrapLines(title || code, 17, 2);
         let y = 28;
         for (const tl of titleLines) {

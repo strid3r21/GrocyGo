@@ -215,7 +215,7 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
       }
 
       if (method === 'GET' && pathname === '/api/health') {
-        sendJson(res, 200, { ok: true, service: 'grocygo-server', version: '2.3.0' });
+        sendJson(res, 200, { ok: true, service: 'grocygo-server', version: '2.3.1' });
         return;
       }
 
@@ -413,14 +413,24 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
           return;
         }
 
-        const bridgeRes = await fetch(`${cfg.bridge_url}/print`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(cfg.bridge_token ? { 'X-PRINT-TOKEN': cfg.bridge_token } : {}),
-          },
-          body: JSON.stringify({ tspl }),
-        });
+        let bridgeRes: Response;
+        try {
+          bridgeRes = await fetch(`${cfg.bridge_url}/print`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              ...(cfg.bridge_token ? { 'X-PRINT-TOKEN': cfg.bridge_token } : {}),
+            },
+            body: JSON.stringify({ tspl }),
+          });
+        } catch (err: any) {
+          sendError(
+            res,
+            502,
+            `Could not reach print bridge at ${cfg.bridge_url}: ${err?.message || 'connection failed'}`
+          );
+          return;
+        }
         const bridgeJson = (await bridgeRes.json().catch(() => ({}))) as any;
         if (!bridgeRes.ok) {
           sendError(
