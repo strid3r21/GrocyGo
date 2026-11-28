@@ -1173,6 +1173,14 @@ async function runTests() {
     assert.equal(Number(editedBatch.price), 5.49);
     assert.equal(editedBatch.note, 'Top shelf');
 
+    const histAfterEdit = await fetch(`${base}/api/products/${prodId}/price-history`, { headers }).then((r) =>
+      r.json()
+    );
+    assert.ok(
+      histAfterEdit.history.some((h: any) => Math.abs(Number(h.unit_price) - 5.49) < 0.001),
+      'Editing a batch price should record an entry in price_history'
+    );
+
     // Restore milk batch back to 1 bottle for deterministic summary output
     await fetch(`${base}/api/stock/entry/${targetBatchId}`, {
       method: 'PUT',
@@ -1435,7 +1443,7 @@ async function runTests() {
     assert.ok(!mcpConsume.result.isError, JSON.stringify(mcpConsume));
     assert.ok(mcpConsume.result.content[0].text.includes('Consumed 1'));
 
-    console.log('ALL SERVER v2.5.0 TESTS PASSED!');
+    console.log('ALL SERVER v2.5.1 TESTS PASSED!');
     console.log('\nSample compact MCP inventory_summary output:\n' + summaryText);
     console.log('\nSample compact MCP search_inventory output:\n' + searchText);
   } finally {

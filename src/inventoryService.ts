@@ -1076,6 +1076,23 @@ export class InventoryService {
       )
       .run(nextAmount, nextBbd, nextPrice, nextNote, nextLocationId, entryId);
 
+    const prevPrice =
+      existing.price !== null && existing.price !== undefined ? Number(existing.price) : null;
+    if (
+      nextPrice !== null &&
+      Number.isFinite(nextPrice) &&
+      nextPrice > 0 &&
+      (prevPrice === null || Math.abs(nextPrice - prevPrice) > 1e-6)
+    ) {
+      this.recordPriceHistory({
+        productId: existing.product_id,
+        unitPrice: nextPrice,
+        quantity: nextAmount,
+        storeName: '',
+        purchasedDate: existing.purchased_date || todayIso(),
+      });
+    }
+
     this.logActivity({
       productId: existing.product_id,
       itemLabel,
