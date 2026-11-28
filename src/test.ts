@@ -532,7 +532,7 @@ async function runTests() {
     assert.equal(enabledWrite.write_enabled, true);
 
     const rwTools = await mcpCall(21, 'tools/list');
-    assert.equal(rwTools.result.tools.length, 23);
+    assert.equal(rwTools.result.tools.length, 24);
 
     // AI creates group and assigns item to group
     const createdGrp = await mcpCall(22, 'tools/call', {
@@ -664,7 +664,7 @@ async function runTests() {
       body: JSON.stringify({ read_enabled: true, write_enabled: true, delete_enabled: false }),
     });
     const writeNoDelTools = await mcpCall(30, 'tools/list');
-    assert.equal(writeNoDelTools.result.tools.length, 23);
+    assert.equal(writeNoDelTools.result.tools.length, 24);
     const blockedDelete = await mcpCall(31, 'tools/call', {
       name: 'delete_group',
       arguments: { group_name: 'Dry Goods' },
@@ -679,7 +679,7 @@ async function runTests() {
       body: JSON.stringify({ delete_enabled: true }),
     });
     const allMcpTools = await mcpCall(32, 'tools/list');
-    assert.equal(allMcpTools.result.tools.length, 27);
+    assert.equal(allMcpTools.result.tools.length, 28);
     const deletedGrp = await mcpCall(33, 'tools/call', {
       name: 'delete_group',
       arguments: { group_name: 'Dry Goods' },
@@ -1443,7 +1443,39 @@ async function runTests() {
     assert.ok(!mcpConsume.result.isError, JSON.stringify(mcpConsume));
     assert.ok(mcpConsume.result.content[0].text.includes('Consumed 1'));
 
-    console.log('ALL SERVER v2.5.1 TESTS PASSED!');
+    // 34. Still Good (snooze expiry) + Freeze It + MCP snooze_expiry
+    const snoozeRes = await fetch(`${base}/api/stock/products/${prodId}/snooze`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ months: 6 }),
+    }).then((r) => r.json());
+    assert.ok(snoozeRes.updated >= 1);
+    assert.ok(snoozeRes.entries[0].note.includes('orig BBD'));
+
+    const freezeEntryId = snoozeRes.entries[0].id;
+    const freezeRes = await fetch(`${base}/api/stock/entry/${freezeEntryId}/freeze`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ freezer_location_id: 2, best_before_date: '2027-06-01' }),
+    }).then((r) => r.json());
+    assert.equal(Number(freezeRes.location_id), 2);
+    assert.equal(freezeRes.best_before_date, '2027-06-01');
+    assert.ok(freezeRes.note.includes('Frozen'));
+
+    const mcpSnooze = await fetch(`${base}/mcp`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 817,
+        method: 'tools/call',
+        params: { name: 'snooze_expiry', arguments: { id: prodId, never_expires: true } },
+      }),
+    }).then((r) => r.json());
+    assert.ok(!mcpSnooze.result.isError, JSON.stringify(mcpSnooze));
+    assert.ok(mcpSnooze.result.content[0].text.includes('No expiry'));
+
+    console.log('ALL SERVER v2.6.0 TESTS PASSED!');
     console.log('\nSample compact MCP inventory_summary output:\n' + summaryText);
     console.log('\nSample compact MCP search_inventory output:\n' + searchText);
   } finally {

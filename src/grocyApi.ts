@@ -1113,6 +1113,46 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
         }
       }
 
+      // ─── Snooze ("Still Good") or Freeze single stock batch ───
+      const stockEntryActionMatch = pathname.match(/^\/api\/stock\/entry\/(\d+)\/(snooze|freeze)$/);
+      if (stockEntryActionMatch && method === 'POST') {
+        const entryId = Number(stockEntryActionMatch[1]);
+        const action = stockEntryActionMatch[2];
+        const body = await readJsonBody(req);
+        if (action === 'snooze') {
+          sendJson(
+            res,
+            200,
+            service.snoozeStockEntry(
+              entryId,
+              {
+                months: body.months !== undefined ? Number(body.months) : undefined,
+                days: body.days !== undefined ? Number(body.days) : undefined,
+                never_expires: Boolean(body.never_expires),
+                new_date: body.new_date ? String(body.new_date) : undefined,
+                note: body.note !== undefined ? String(body.note) : undefined,
+              },
+              currentUser.id
+            )
+          );
+          return;
+        }
+        sendJson(
+          res,
+          200,
+          service.freezeStockEntry(
+            entryId,
+            {
+              freezer_location_id: Number(body.freezer_location_id),
+              best_before_date: String(body.best_before_date || ''),
+              note: body.note !== undefined ? String(body.note) : undefined,
+            },
+            currentUser.id
+          )
+        );
+        return;
+      }
+
       // ─── Edit single stock batch entry ────────────────────────
       const stockEntryMatch = pathname.match(/^\/api\/stock\/entry\/(\d+)$/);
       if (stockEntryMatch && method === 'PUT') {
@@ -1217,7 +1257,7 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
       }
 
       const prodStockMatch = pathname.match(
-        /^\/api\/stock\/products\/(\d+)(?:\/(entries|locations|add|consume|open|open-extend|inventory|transfer))?$/
+        /^\/api\/stock\/products\/(\d+)(?:\/(entries|locations|add|consume|open|open-extend|inventory|transfer|snooze))?$/
       );
       if (prodStockMatch) {
         const productId = Number(prodStockMatch[1]);
@@ -1289,6 +1329,26 @@ export function createRequestHandler(ctx: DbContext, service: InventoryService) 
         if (sub === 'transfer' && method === 'POST') {
           const body = await readJsonBody(req);
           sendJson(res, 200, service.transferProduct(productId, body, currentUser.id));
+          return;
+        }
+
+        if (sub === 'snooze' && method === 'POST') {
+          const body = await readJsonBody(req);
+          sendJson(
+            res,
+            200,
+            service.snoozeProductStock(
+              productId,
+              {
+                stock_entry_id: body.stock_entry_id ? Number(body.stock_entry_id) : undefined,
+                months: body.months !== undefined ? Number(body.months) : undefined,
+                days: body.days !== undefined ? Number(body.days) : undefined,
+                never_expires: Boolean(body.never_expires),
+                new_date: body.new_date ? String(body.new_date) : undefined,
+              },
+              currentUser.id
+            )
+          );
           return;
         }
       }

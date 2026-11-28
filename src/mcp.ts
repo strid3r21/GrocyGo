@@ -453,6 +453,23 @@ const MCP_WRITE_TOOLS = [
       additionalProperties: false,
     },
   },
+  {
+    name: 'snooze_expiry',
+    description:
+      'Mark an overdue or expiring item (like spices or dry goods) as "Still Good" by extending its best-before date by months/days or setting no expiry.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'integer', description: 'Product ID.' },
+        name: { type: 'string', description: 'Product name (if id omitted).' },
+        stock_entry_id: { type: 'integer', description: 'Optional specific batch ID.' },
+        months: { type: 'integer', description: 'Extend expiry by N months from today (e.g. 3, 6, 12).' },
+        days: { type: 'integer', description: 'Extend expiry by N days from today.' },
+        never_expires: { type: 'boolean', description: 'Set true to mark as no expiry.' },
+      },
+      additionalProperties: false,
+    },
+  },
 ];
 
 const MCP_DELETE_TOOLS = [
@@ -1910,6 +1927,28 @@ async function executeTool(
       | undefined;
     return textResult(
       `${spoiled ? 'Marked spoiled' : 'Consumed'} ${res.consumed} of #${productId} ${prod?.name || 'item'}`
+    );
+  }
+
+  if (name === 'snooze_expiry') {
+    const productId = resolveProductId(db, args.id, args.name);
+    if (!productId) return textResult('Item not found. Provide a valid id or name.', true);
+    const res = service.snoozeProductStock(
+      productId,
+      {
+        stock_entry_id: typeof args.stock_entry_id === 'number' ? args.stock_entry_id : undefined,
+        months: typeof args.months === 'number' ? args.months : undefined,
+        days: typeof args.days === 'number' ? args.days : undefined,
+        never_expires: Boolean(args.never_expires),
+      },
+      actingUserId
+    );
+    const prod = db.prepare('SELECT name FROM products WHERE id = ?').get(productId) as
+      | { name: string }
+      | undefined;
+    const newBbd = res.entries[0]?.best_before_date;
+    return textResult(
+      `Marked #${productId} ${prod?.name || 'item'} still good (${res.updated} batch${res.updated === 1 ? '' : 'es'} -> ${newBbd === NEVER_EXPIRES ? 'No expiry' : newBbd})`
     );
   }
 

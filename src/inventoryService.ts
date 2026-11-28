@@ -23,6 +23,15 @@ export function addDaysIso(days: number): string {
   return `${y}-${m}-${day}`;
 }
 
+export function addMonthsIso(months: number): string {
+  const d = new Date();
+  d.setMonth(d.getMonth() + months);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 export class InventoryService {
   constructor(private readonly ctx: DbContext) {}
 
@@ -1100,6 +1109,137 @@ export class InventoryService {
       transactionType: 'stock_edit',
       locationId: nextLocationId ?? null,
       note: nextNote || `Edited batch #${entryId}`,
+      userId,
+    });
+
+    return this.db.prepare('SELECT * FROM stock WHERE id = ?').get(entryId);
+  }
+
+  snoozeStockEntry(
+    entryId: number,
+    payload: {
+      months?: number;
+      days?: number;
+      never_expires?: boolean;
+      new_date?: string;
+      note?: string;
+    },
+    userId?: number | null
+  ) {
+    const existing = this.db.prepare('SELECT * FROM stock WHERE id = ?').get(entryId) as any;
+    if (!existing) throw new Error(`Stock entry #${entryId} not found`);
+
+    let nextBbd = NEVER_EXPIRES;
+    if (payload.never_expires) {
+      nextBbd = NEVER_EXPIRES;
+    } else if (payload.new_date && /^\d{4}-\d{2}-\d{2}$/.test(payload.new_date.trim())) {
+      nextBbd = payload.new_date.trim();
+    } else if (payload.months !== undefined && Number.isFinite(Number(payload.months)) && Number(payload.months) > 0) {
+      nextBbd = addMonthsIso(Math.round(Number(payload.months)));
+    } else if (payload.days !== undefined && Number.isFinite(Number(payload.days)) && Number(payload.days) > 0) {
+      nextBbd = addDaysIso(Math.round(Number(payload.days)));
+    } else {
+      nextBbd = addMonthsIso(3);
+    }
+
+    const prevBbd = String(existing.best_before_date || '').trim();
+    let nextNote = String(payload.note !== undefined ? payload.note : existing.note || '').trim();
+    if (prevBbd && prevBbd !== NEVER_EXPIRES && !/orig BBD/i.test(nextNote)) {
+      const tag = `Still good (orig BBD ${prevBbd})`;
+      nextNote = nextNote ? `${nextNote} · ${tag}` : tag;
+    }
+
+    this.db
+      .prepare('UPDATE stock SET best_before_date = ?, note = ? WHERE id = ?')
+      .run(nextBbd, nextNote, entryId);
+
+    const product = this.db
+      .prepare('SELECT id, name FROM products WHERE id = ?')
+      .get(existing.product_id) as { id: number; name: string } | undefined;
+
+    this.logActivity({
+      productId: existing.product_id,
+      itemLabel: product?.name || `Product #${existing.product_id}`,
+      amount: Number(existing.amount || 0),
+      transactionType: 'stock_snooze',
+      locationId: existing.location_id ?? null,
+      note: nextBbd === NEVER_EXPIRES ? 'Marked still good (no expiry)' : `Still good until ${nextBbd}`,
+      userId,
+    });
+
+    return this.db.prepare('SELECT * FROM stock WHERE id = ?').get(entryId);
+  }
+
+  snoozeProductStock(
+    productId: number,
+    payload: {
+      stock_entry_id?: number;
+      months?: number;
+      days?: number;
+      never_expires?: boolean;
+      new_date?: string;
+    },
+    userId?: number | null
+  ) {
+    if (payload.stock_entry_id) {
+      const updated = this.snoozeStockEntry(payload.stock_entry_id, payload, userId);
+      return { updated: 1, entries: [updated] };
+    }
+    const entries = this.db
+      .prepare('SELECT id, best_before_date FROM stock WHERE product_id = ? AND amount > 0 ORDER BY best_before_date ASC')
+      .all(productId) as Array<{ id: number; best_before_date: string }>;
+    if (entries.length === 0) {
+      throw new Error(`No active stock batches found for product #${productId}`);
+    }
+    const soonCutoff = addDaysIso(this.getAlertSettings().expiring_soon_days);
+    const urgent = entries.filter(
+      (e) => e.best_before_date && e.best_before_date !== NEVER_EXPIRES && e.best_before_date <= soonCutoff
+    );
+    const targets = urgent.length > 0 ? urgent : [entries[0]];
+    const updatedEntries = targets.map((t) => this.snoozeStockEntry(t.id, payload, userId));
+    return { updated: updatedEntries.length, entries: updatedEntries };
+  }
+
+  freezeStockEntry(
+    entryId: number,
+    payload: {
+      freezer_location_id: number;
+      best_before_date: string;
+      note?: string;
+    },
+    userId?: number | null
+  ) {
+    const existing = this.db.prepare('SELECT * FROM stock WHERE id = ?').get(entryId) as any;
+    if (!existing) throw new Error(`Stock entry #${entryId} not found`);
+
+    const freezerLocId = Number(payload.freezer_location_id);
+    const loc = this.db
+      .prepare('SELECT id, name FROM locations WHERE id = ?')
+      .get(freezerLocId) as { id: number; name: string } | undefined;
+    if (!loc) throw new Error(`Freezer location #${freezerLocId} not found`);
+
+    const nextBbd = payload.best_before_date?.trim() || addMonthsIso(6);
+    const freezeTag = `Frozen ${todayIso()}`;
+    let nextNote = String(payload.note !== undefined ? payload.note : existing.note || '').trim();
+    if (!/Frozen \d{4}-\d{2}-\d{2}/i.test(nextNote)) {
+      nextNote = nextNote ? `${nextNote} · ${freezeTag}` : freezeTag;
+    }
+
+    this.db
+      .prepare('UPDATE stock SET location_id = ?, best_before_date = ?, note = ? WHERE id = ?')
+      .run(freezerLocId, nextBbd, nextNote, entryId);
+
+    const product = this.db
+      .prepare('SELECT id, name FROM products WHERE id = ?')
+      .get(existing.product_id) as { id: number; name: string } | undefined;
+
+    this.logActivity({
+      productId: existing.product_id,
+      itemLabel: product?.name || `Product #${existing.product_id}`,
+      amount: Number(existing.amount || 0),
+      transactionType: 'transfer',
+      locationId: freezerLocId,
+      note: `Moved to ${loc.name} · best by ${nextBbd}`,
       userId,
     });
 
